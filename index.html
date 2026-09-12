@@ -1,409 +1,283 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>自动战斗 Demo</title>
-  <style>
-    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-width: 900px; min-height: 100vh; background: #111822; color: #e7edf5; }
-    main { width: min(1180px, calc(100vw - 48px)); margin: 0 auto; padding: 28px 0 36px; }
-    h1 { font-size: 25px; margin: 0 0 7px; letter-spacing: .02em; }
-    .subtitle { margin: 0 0 22px; color: #9eabba; }
-    .layout { display: grid; grid-template-columns: 250px 1fr; gap: 18px; align-items: start; }
-    .panel, .arena-card { border: 1px solid #2b3a4c; background: #182230; border-radius: 12px; box-shadow: 0 14px 40px #05090d66; }
-    .panel { padding: 18px; }
-    .side-title { font-size: 14px; margin: 0 0 12px; color: #cdd9e8; }
-    .side-title.enemy { margin-top: 18px; color: #ffbebd; }
-    label { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; font-size: 13px; color: #b9c7d7; }
-    input { width: 58px; padding: 7px 6px; color: #eef5ff; font: inherit; text-align: center; background: #0e151e; border: 1px solid #3b4d61; border-radius: 6px; }
-    button { width: 100%; padding: 10px; border: 0; border-radius: 7px; font: 600 14px inherit; color: #07111e; background: #70caf4; cursor: pointer; margin-top: 10px; }
-    button:hover { filter: brightness(1.08); } button.secondary { color: #d5e0ed; background: #34475c; }
-    .notes { margin: 18px 0 0; padding: 12px; border-radius: 7px; background: #111a25; color: #8e9daf; font-size: 12px; line-height: 1.55; }
-    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 17px; font-size: 12px; color: #b7c4d1; }
-    .dot { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; }
-    .arena-card { overflow: hidden; }
-    .status { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; border-bottom: 1px solid #2b3a4c; font-size: 13px; }
-    #result { font-weight: 700; color: #dce8f6; } #stats { color: #91a2b5; }
-    canvas { display: block; width: 100%; height: auto; background: #202c26; }
-    .footer { margin: 14px 0 0 268px; color: #7e8d9e; font-size: 12px; }
-    kbd { padding: 1px 4px; border-radius: 3px; background:#2f4052; color:#dce6f2; }
-    .tactics { margin-top: 18px; padding-top: 15px; border-top: 1px solid #2b3a4c; }
-    .tactics h3 { margin: 0 0 6px; font-size: 14px; color: #cdd9e8; }
-    .tactics p { margin: 0 0 9px; color: #8e9daf; font-size: 12px; line-height: 1.45; }
-    .zone-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .zone-tool { margin: 0; padding: 8px 5px; color: #b9c7d7; background: #263749; border: 1px solid #3b4d61; font-size: 12px; }
-    .zone-tool.active { color: #07111e; background: #70caf4; border-color: #70caf4; }
-    #clearZones { margin-top: 7px; padding: 8px; font-size: 12px; }
-    .zone-status { min-height: 32px; margin-top: 9px; color: #92a4b6; font-size: 12px; line-height: 1.4; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>自动战斗 · 最小验证版</h1>
-    <p class="subtitle">现代战争 · 战前配兵，战斗中零操作。单位差异来自机制，而非单纯数值。</p>
-    <div class="layout">
-      <aside class="panel">
-        <h2 class="side-title">我方（蓝）</h2>
-        <label>突击步兵 <input id="blueAssault" type="number" value="4" min="0" max="20"></label>
-        <label>机枪组 <input id="blueMg" type="number" value="1" min="0" max="20"></label>
-        <label>榴弹兵 <input id="blueGrenadier" type="number" value="1" min="0" max="20"></label>
-        <label>坦克 <input id="blueTank" type="number" value="0" min="0" max="10"></label>
-        <label>反坦克班 <input id="blueAt" type="number" value="0" min="0" max="20"></label>
-        <label>攻击直升机 <input id="blueHeli" type="number" value="0" min="0" max="10"></label>
-        <label>防空班 <input id="blueAa" type="number" value="0" min="0" max="20"></label>
-        <label>医疗兵 <input id="blueMedic" type="number" value="1" min="0" max="20"></label>
-        <h2 class="side-title enemy">敌方（红）</h2>
-        <label>突击步兵 <input id="redAssault" type="number" value="4" min="0" max="20"></label>
-        <label>机枪组 <input id="redMg" type="number" value="1" min="0" max="20"></label>
-        <label>榴弹兵 <input id="redGrenadier" type="number" value="1" min="0" max="20"></label>
-        <label>坦克 <input id="redTank" type="number" value="0" min="0" max="10"></label>
-        <label>反坦克班 <input id="redAt" type="number" value="0" min="0" max="20"></label>
-        <label>攻击直升机 <input id="redHeli" type="number" value="0" min="0" max="10"></label>
-        <label>防空班 <input id="redAa" type="number" value="0" min="0" max="20"></label>
-        <label>医疗兵 <input id="redMedic" type="number" value="1" min="0" max="20"></label>
-        <button id="start">开始战斗</button>
-        <button id="reset" class="secondary">重置战场</button>
-        <section class="tactics" aria-label="战术区域">
-          <h3>战术指令 · 最多 3 个区域</h3>
-          <p>选一种意图后点击战场。区域是持续偏好，不是单位移动指令。</p>
-          <div class="zone-tools">
-            <button class="zone-tool active" data-zone="rally">集结区</button>
-            <button class="zone-tool" data-zone="suppress">压制区</button>
-            <button class="zone-tool" data-zone="fire">火力覆盖区</button>
-            <button class="zone-tool" data-zone="danger">危险区</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>战役地图 · 兵团出击 Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-width: 1120px;
+        margin: 0;
+        background: #101820;
+        color: #e8eef5;
+      }
+
+      main {
+        max-width: 1480px;
+        margin: auto;
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 5px;
+        font-size: 25px;
+      }
+
+      .subtitle {
+        margin: 0 0 18px;
+        color: #9eabba;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 330px minmax(700px, 1fr) 255px;
+        align-items: start;
+        gap: 16px;
+      }
+
+      .panel,
+      .map-card {
+        border: 1px solid #34485a;
+        border-radius: 11px;
+        background: #182633;
+        box-shadow: 0 12px 35px #05090d66;
+      }
+
+      .panel {
+        padding: 14px;
+      }
+
+      .panel h2 {
+        margin: 3px 0 9px;
+        font-size: 15px;
+      }
+
+      .panel h3 {
+        margin: 15px 0 5px;
+        padding-top: 13px;
+        border-top: 1px solid #35495b;
+        font-size: 13px;
+      }
+
+      .setting {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+
+      .setting input {
+        width: 72px;
+      }
+
+      input,
+      button {
+        padding: 6px;
+        border: 1px solid #40586b;
+        border-radius: 6px;
+        color: #e8eef5;
+        font: inherit;
+        background: #111c27;
+      }
+
+      button {
+        cursor: pointer;
+        border: 0;
+        color: #07131b;
+        font-weight: 700;
+        background: #64c5ec;
+      }
+
+      button:hover {
+        filter: brightness(1.08);
+      }
+
+      .group {
+        margin: 8px 0;
+        padding: 9px;
+        border: 1px solid #354b5b;
+        border-radius: 7px;
+        cursor: pointer;
+        background: #121e29;
+      }
+
+      .group.selected {
+        border-color: #72d5ff;
+        box-shadow: 0 0 0 1px #72d5ff66;
+      }
+
+      .group.destroyed {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      .group strong {
+        font-size: 13px;
+      }
+
+      .group small {
+        display: block;
+        margin-top: 4px;
+        color: #94a9b9;
+        font-size: 11px;
+      }
+
+      .map-card {
+        overflow: hidden;
+      }
+
+      .status {
+        display: flex;
+        justify-content: space-between;
+        gap: 15px;
+        padding: 12px 15px;
+        border-bottom: 1px solid #34485a;
+        font-size: 13px;
+      }
+
+      .status span:last-child {
+        color: #9fb3c4;
+        text-align: right;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        cursor: pointer;
+        background: #203128;
+      }
+
+      .hint,
+      .property {
+        color: #a9bac8;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .hint {
+        margin: 12px 0 0;
+      }
+
+      .property {
+        margin: 0;
+      }
+
+      .property dt {
+        float: left;
+        clear: left;
+        color: #8197a9;
+      }
+
+      .property dd {
+        margin: 0 0 4px;
+        color: #e1ebf3;
+        text-align: right;
+      }
+
+      .legend {
+        margin-top: 10px;
+        color: #a8bac8;
+        font-size: 11px;
+        line-height: 1.75;
+      }
+
+      .footer {
+        margin-top: 12px;
+        color: #8095a7;
+        font-size: 12px;
+      }
+
+      .log {
+        min-height: 48px;
+        color: #b5c9d6;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .reachable {
+        color: #87dfff;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>战役地图 · 兵团出击</h1>
+      <p class="subtitle">
+        先只使用地图的节点与通路属性：选择兵团，再点击目标节点；系统按图结构寻路，兵团抵达敌军节点后自动交战。
+      </p>
+
+      <div class="layout">
+        <aside class="panel">
+          <h2>战役设置</h2>
+          <div class="setting">
+            种子
+            <input id="seed" value="frontier-01" />
+            <label>
+              地图规模
+              <input id="corps" type="number" min="4" max="8" value="6" />
+            </label>
+            <button id="generate">生成</button>
+            <button id="start">开始战役</button>
           </div>
-          <button id="clearZones" class="secondary">清除战术区域</button>
-          <div id="zoneStatus" class="zone-status">集结区：地面单位会在未交战时靠拢。</div>
+
+          <h3>蓝方单位</h3>
+          <div id="groups"></div>
+          <p class="hint">
+            暂时一个单位就是一个可选、可移动、可交战的战役单位。所有单位初始部署于司令部；选择一个单位后点击节点出击。
+          </p>
+
+          <h3>当前命令</h3>
+          <div class="log" id="log"></div>
+          <div class="legend">
+            <span class="reachable">亮边节点：当前选中单位可到达</span><br />
+            实线：双向通路　箭头：只能从箭尾到箭头<br />
+            蓝圆：我方单位　红圆：敌方单位　交叉剑：交战中
+          </div>
+        </aside>
+
+        <section class="map-card">
+          <div class="status">
+            <span id="status">正在生成战役地图</span>
+            <span id="stats"></span>
+          </div>
+          <canvas id="map" width="1180" height="700"></canvas>
         </section>
-        <div class="legend">
-          <span><i class="dot" style="background:#4fc3f7"></i>蓝色：我方</span><span><i class="dot" style="background:#ff746f"></i>红色：敌方</span>
-          <span>● 突击　■ 机枪　◇ 榴弹　▰ 坦克</span><span>△ 反坦克　⌁ 直升机　⌃ 防空　＋ 医疗</span>
-        </div>
-        <div class="notes">直升机优先用导弹打坦克等高价值目标；防空班只攻击空中单位，能迫使直升机撤离。坦克减免小口径伤害；反坦克班优先锁定坦克。</div>
-      </aside>
-      <section class="arena-card">
-        <div class="status"><span id="result">设置兵力后开始</span><span id="stats">蓝 0 : 0 红</span></div>
-        <canvas id="arena" width="900" height="560"></canvas>
-      </section>
-    </div>
-    <p class="footer">提示：试试 <kbd>1 直升机 + 4 突击</kbd> 对阵 <kbd>1 坦克 + 1 防空班 + 3 突击</kbd>；每局初始站位和攻击节奏略有变化。</p>
-  </main>
-  <script src="tactics.js"></script>
-  <script>
-    const canvas = document.querySelector('#arena');
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
-    const C = { blue: '#4fc3f7', red: '#ff746f', blueDark: '#176d9a', redDark: '#9b393c' };
-    const units = [];
-    let running = false, lastTime = 0, elapsed = 0, result = '设置兵力后开始';
-    const tactics = new window.Tactics.ZoneController();
 
-    const config = {
-      assault:   { hp: 118, speed: 60, range: 58,  damage: 12, cooldown: .62, radius: 10 },
-      mg:        { hp: 82,  speed: 34, range: 155, preferred: 132, safety: 52, damage: 6, cooldown: .22, radius: 9 },
-      grenadier: { hp: 72,  speed: 43, range: 145, preferred: 122, minRange: 48, safety: 58, damage: 19, splash: 42, cooldown: 1.45, radius: 9 },
-      tank:      { hp: 330, speed: 33, range: 178, preferred: 142, damage: 29, splash: 34, cooldown: 1.35, radius: 15 },
-      at:        { hp: 58,  speed: 42, range: 210, preferred: 185, safety: 70, damage: 120, damageVsInfantry: 7, cooldown: 1.2, radius: 8 },
-      heli:      { hp: 112, speed: 72, range: 205, preferred: 176, safety: 250, damage: 108, damageVsInfantry: 18, cooldown: 1.38, radius: 13 },
-      aa:        { hp: 70,  speed: 42, range: 230, preferred: 198, damage: 34, cooldown: .58, radius: 8 },
-      medic:     { hp: 68,  speed: 51, healRange: 66, preferred: 62, safety: 90, heal: 9, cooldown: .46, radius: 8 }
-    };
-    const val = id => Math.max(0, Math.min(20, Number(document.querySelector(id).value) || 0));
-    const alive = u => u.hp > 0;
-    const enemyOf = u => units.filter(v => alive(v) && v.team !== u.team);
-    const groundEnemiesOf = u => enemyOf(u).filter(v => v.type !== 'heli');
-    const airEnemiesOf = u => enemyOf(u).filter(v => v.type === 'heli');
-    const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
-    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+        <aside class="panel">
+          <h2>节点属性</h2>
+          <p class="hint">
+            这是代码读取的节点数据，不是从图形推断：点击任意节点检查其 ID、阵营、类型、容量和效果标签。
+          </p>
+          <dl class="property" id="properties">
+            <dt>状态</dt>
+            <dd>点击地图节点</dd>
+          </dl>
 
-    function spawn(team, type, count) {
-      const side = team === 'blue' ? 1 : -1;
-      for (let i = 0; i < count; i++) {
-        const spec = config[type];
-        const row = i - (count - 1) / 2;
-        const back = ({ assault: 0, tank: 16, aa: 35, mg: 68, grenadier: 88, at: 104, medic: 128, heli: 146 })[type];
-        units.push({ team, type, x: W/2 - side * (315 + back) + (Math.random() - .5) * 16,
-          y: H/2 + row * 32 + (Math.random() - .5) * 12, hp: spec.hp, maxHp: spec.hp,
-          cooldown: Math.random() * .35, think: Math.random() * .2, target: null, facing: side, flash: 0, shot: null,
-          suppressed: 0, dash: 0, dashCooldown: Math.random() * 1.5, homeY: H/2 + row * 32, withdrew: false });
-      }
-    }
-    function reset() {
-      units.length = 0; running = false; elapsed = 0; result = '设置兵力后开始';
-      for (const type of ['assault', 'mg', 'grenadier', 'tank', 'at', 'heli', 'aa', 'medic']) {
-        spawn('blue', type, val(`#blue${type[0].toUpperCase()}${type.slice(1)}`));
-        spawn('red', type, val(`#red${type[0].toUpperCase()}${type.slice(1)}`));
-      }
-      draw();
-    }
-    function nearestEnemy(u) {
-      let best = null, bestD = Infinity;
-      for (const e of groundEnemiesOf(u)) { const d = dist(u, e); if (d < bestD) { best = e; bestD = d; } }
-      return best;
-    }
-    function supportTarget(u) {
-      // A ranged unit's job is to support the fight already happening, not to chase
-      // the opponent it happened to see at spawn time. Enemies within shooting range
-      // come first; otherwise choose an enemy currently fighting an ally, then distance.
-      let best = null, bestScore = Infinity;
-      for (const e of groundEnemiesOf(u)) {
-        const d = dist(u, e);
-        const inRange = d <= config[u.type].range;
-        const fightingAlly = e.target && alive(e.target) && e.target.team === u.team;
-        const armorPriority = u.type === 'at' && e.type === 'tank' ? 4000 : 0;
-        const zonePriority = tacticalTargetPriority(u, e);
-        const score = d - (inRange ? 10000 : 0) - (fightingAlly ? 700 : 0) - armorPriority - zonePriority;
-        if (score < bestScore) { best = e; bestScore = score; }
-      }
-      return best;
-    }
-    function tacticalTargetPriority(u, target) {
-      // A tactical zone is a preference layered over the existing role AI. It never
-      // makes an anti-tank team abandon a nearby tank or asks an unsupported role to
-      // perform an impossible action.
-      if (u.team !== 'blue') return 0;
-      if (tactics.zones.some(z => z.type === 'suppress' && tactics.contains(z, target) && ['mg', 'grenadier', 'tank'].includes(u.type))) return 1800;
-      if (tactics.zones.some(z => z.type === 'fire' && tactics.contains(z, target) && ['grenadier', 'tank'].includes(u.type))) return 2600;
-      return 0;
-    }
-    function woundedAlly(u) {
-      let best = null, bestScore = -Infinity;
-      for (const a of units.filter(v => alive(v) && v.team === u.team && v !== u && v.hp < v.maxHp)) {
-        const score = (a.maxHp - a.hp) * 12 - dist(u, a);
-        if (score > bestScore) { best = a; bestScore = score; }
-      }
-      return best;
-    }
-    function airTarget(u) {
-      let best = null, bestScore = Infinity;
-      for (const e of groundEnemiesOf(u)) {
-        const priority = e.type === 'tank' ? 4200 : e.type === 'at' ? 1000 : e.type === 'mg' ? 650 : 0;
-        const score = dist(u, e) - priority;
-        if (score < bestScore) { best = e; bestScore = score; }
-      }
-      return best;
-    }
-    function steer(u, dx, dy, amount, dt) {
-      const length = Math.hypot(dx, dy) || 1;
-      u.x += dx / length * amount * dt; u.y += dy / length * amount * dt;
-      u.x = clamp(u.x, 16, W - 16); u.y = clamp(u.y, 16, H - 16);
-    }
-    function advanceToFront(u, dt) {
-      // Every ground unit has an implicit "advance to the front" order. This prevents
-      // units that cannot shoot aircraft from appearing to have frozen when air is the only threat.
-      const side = u.team === 'blue' ? 1 : -1;
-      const frontX = W / 2 - side * 32;
-      if (Math.abs(u.x - frontX) > 7) steer(u, frontX - u.x, (H / 2 - u.y) * .22, config[u.type].speed, dt);
-    }
-    function obeyTacticalZones(u, target, dt) {
-      if (u.team !== 'blue' || u.type === 'heli') return false;
-      const spec = config[u.type];
-      const danger = tactics.zones.find(z => (z.type === 'danger' || (z.type === 'fire' && !['tank', 'grenadier'].includes(u.type))) && tactics.contains(z, u));
-      if (danger) {
-        steer(u, u.x - danger.x, u.y - danger.y, spec.speed * 1.15, dt);
-        return true;
-      }
-      const rally = tactics.nearest('rally', u);
-      // Rally only interrupts an approach while the enemy is still distant. Once a
-      // unit is committed to a fight, its usual combat role stays in charge.
-      if (rally && target && dist(u, target) > 175 && dist(u, rally) > 24) {
-        steer(u, rally.x - u.x, rally.y - u.y, spec.speed, dt);
-        return true;
-      }
-      return false;
-    }
-    function updateUnit(u, dt) {
-      if (!alive(u)) return;
-      u.cooldown -= dt; u.flash = Math.max(0, u.flash - dt);
-      u.suppressed = Math.max(0, u.suppressed - dt); u.dash = Math.max(0, u.dash - dt); u.dashCooldown -= dt;
-      if (u.shot) { u.shot.time -= dt; if (u.shot.time <= 0) u.shot = null; }
-      if (u.type === 'medic') return updateMedic(u, dt);
-      if (u.type === 'heli') return updateHeli(u, dt);
-      if (u.type === 'aa') return updateAA(u, dt);
-      u.think -= dt;
-      if (!u.target || !alive(u.target) || u.think <= 0) {
-        u.target = u.type === 'assault' ? nearestEnemy(u) : supportTarget(u);
-        u.think = .22 + Math.random() * .08;
-      }
-      const t = u.target; if (!t) { advanceToFront(u, dt); return; }
-      if (obeyTacticalZones(u, t, dt)) return;
-      const d = dist(u,t); const dx = t.x-u.x, dy = t.y-u.y;
-      u.facing = Math.sign(dx) || u.facing;
-      const spec = config[u.type];
-      const moveSpeed = spec.speed * (u.suppressed > 0 ? .42 : 1);
-      if (u.type === 'assault') {
-        if (d > spec.range) {
-          if (u.dashCooldown <= 0 && d > spec.range + 65) { u.dash = .48; u.dashCooldown = 3.1; }
-          steer(u, dx, dy, moveSpeed * (u.dash > 0 ? 1.7 : 1), dt);
-        }
-        else attack(u, t, spec);
-      } else if (u.type === 'tank') {
-        // Tanks keep advancing under fire and never perform the infantry retreat dance.
-        if (d > spec.preferred + 8) steer(u, dx, dy, spec.speed, dt);
-        if (d <= spec.range) attack(u, t, spec);
-      } else {
-        const closeAssault = enemyOf(u).filter(e => e.type === 'assault').sort((a,b) => dist(u,a)-dist(u,b))[0];
-        const assaultDistance = closeAssault ? dist(u, closeAssault) : Infinity;
-        if (assaultDistance < spec.safety) {
-          steer(u, u.x-closeAssault.x, u.y-closeAssault.y, moveSpeed * 1.12, dt);
-        } else if (d > spec.preferred + 7) {
-          steer(u, dx, dy, moveSpeed, dt);
-        } else if (d < spec.preferred - 22 && t.type === 'assault') {
-          steer(u, -dx, -dy, moveSpeed * .55, dt);
-        }
-        if (d <= spec.range && (u.type !== 'grenadier' || d >= spec.minRange)) attack(u, t, spec);
-      }
-    }
-    function updateMedic(u, dt) {
-      const spec = config.medic; const threat = nearestEnemy(u);
-      const wounded = woundedAlly(u); const dx = wounded ? wounded.x-u.x : 0, dy = wounded ? wounded.y-u.y : 0;
-      const threatDistance = threat ? dist(u, threat) : Infinity;
-      if (threatDistance < spec.safety) steer(u, u.x-threat.x, u.y-threat.y, spec.speed * 1.15, dt);
-      else if (wounded && Math.hypot(dx,dy) > spec.preferred) steer(u, dx, dy, spec.speed, dt);
-      else if (wounded && u.cooldown <= 0) {
-        wounded.hp = Math.min(wounded.maxHp, wounded.hp + spec.heal); wounded.flash = .1;
-        u.shot = { x: wounded.x, y: wounded.y, time: .13, kind: 'heal' }; u.cooldown = spec.cooldown;
-      }
-    }
-    function updateHeli(u, dt) {
-      const spec = config.heli; u.think -= dt;
-      if (!u.target || !alive(u.target) || u.think <= 0) { u.target = airTarget(u); u.think = .18; }
-      const t = u.target; if (!t) return;
-      const threat = enemyOf(u).filter(e => e.type === 'aa').sort((a,b) => dist(u,a)-dist(u,b))[0];
-      const threatDistance = threat ? dist(u, threat) : Infinity;
-      const d = dist(u,t), dx=t.x-u.x, dy=t.y-u.y;
-      u.facing = Math.sign(dx) || u.facing;
-      // AA creates a no-go zone. The helicopter disengages instead of hovering and trading shots.
-      if (threatDistance < spec.safety) {
-        steer(u, u.x-threat.x, u.y-threat.y, spec.speed * 1.1, dt);
-        // Leaving the map is a withdrawal, not a death: it ends this unit's sortie and
-        // prevents an AA-screened target from creating a permanent stalemate.
-        if (u.x <= 17 || u.x >= W - 17 || u.y <= 17 || u.y >= H - 17) { u.withdrew = true; u.hp = 0; }
-      }
-      else if (d > spec.preferred + 10) steer(u, dx, dy, spec.speed, dt);
-      else if (d < spec.preferred - 28) steer(u, -dx, -dy, spec.speed * .62, dt);
-      else if (d <= spec.range) attack(u, t, spec);
-    }
-    function updateAA(u, dt) {
-      const spec = config.aa; const target = airEnemiesOf(u).sort((a,b) => dist(u,a)-dist(u,b))[0];
-      if (!target) {
-        const tank = units.filter(v => alive(v) && v.team === u.team && v.type === 'tank').sort((a,b) => dist(u,a)-dist(u,b))[0];
-        if (tank && dist(u,tank) > 72) steer(u, tank.x-u.x, tank.y-u.y, spec.speed, dt);
-        else advanceToFront(u, dt);
-        return;
-      }
-      const d = dist(u,target), dx=target.x-u.x, dy=target.y-u.y;
-      u.facing = Math.sign(dx) || u.facing;
-      if (d > spec.preferred + 8) steer(u, dx, dy, spec.speed, dt);
-      if (d <= spec.range) attack(u, target, spec);
-    }
-    function attack(u, target, spec) {
-      if (u.cooldown > 0 || !alive(target)) return;
-      if (u.type === 'grenadier' || u.type === 'tank') {
-        for (const e of enemyOf(u)) if (dist(e, target) <= spec.splash) dealDamage(u, e, spec.damage);
-        u.shot = { x: target.x, y: target.y, time: .22, kind: 'blast', splash: spec.splash };
-      } else {
-        const damage = (u.type === 'at' && target.type !== 'tank') || (u.type === 'heli' && target.type !== 'tank') ? spec.damageVsInfantry : spec.damage;
-        dealDamage(u, target, damage);
-        if (u.type === 'mg' && target.type !== 'tank') target.suppressed = Math.max(target.suppressed, .78);
-        u.shot = { x: target.x, y: target.y, time: u.type === 'mg' ? .08 : .12, kind: u.type === 'heli' ? 'missile' : u.type === 'aa' ? 'aa' : null };
-      }
-      u.cooldown = spec.cooldown + Math.random() * .12;
-    }
-    function dealDamage(source, target, damage) {
-      // Armour is a rule, not just a bigger health bar: small arms bounce, grenades hurt a little,
-      // and dedicated anti-tank weapons use their full value.
-      const multiplier = target.type !== 'tank' ? 1 : (source.type === 'at' || source.type === 'heli') ? 1 : source.type === 'grenadier' ? .35 : .18;
-      target.hp -= damage * multiplier; target.flash = .12;
-    }
-    function separate(dt) {
-      const living = units.filter(alive);
-      for (let i=0; i<living.length; i++) for (let j=i+1; j<living.length; j++) {
-        const a=living[i], b=living[j], dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||.01;
-        if (a.type === 'heli' || b.type === 'heli') continue;
-        const gap = config[a.type].radius + config[b.type].radius + 3;
-        if (d < gap) { const push=(gap-d)*.5*3.4*dt; a.x-=dx/d*push; a.y-=dy/d*push; b.x+=dx/d*push; b.y+=dy/d*push; }
-      }
-    }
-    function update(dt) {
-      elapsed += dt;
-      for (const u of units) updateUnit(u,dt);
-      separate(dt);
-      const blue = units.filter(u=>alive(u)&&u.team==='blue').length;
-      const red = units.filter(u=>alive(u)&&u.team==='red').length;
-      if (!blue || !red) {
-        running=false;
-        const blueRetreated = units.some(u => u.team === 'blue' && u.withdrew);
-        const redRetreated = units.some(u => u.team === 'red' && u.withdrew);
-        result = blue ? (redRetreated ? '敌方空中单位撤离' : '我方胜利') : red ? (blueRetreated ? '我方空中单位撤离' : '敌方胜利') : '平局';
-      }
-      document.querySelector('#stats').textContent = `蓝 ${blue} : ${red} 红 · ${elapsed.toFixed(1)} 秒`;
-      document.querySelector('#result').textContent = result;
-    }
-    function draw() {
-      ctx.clearRect(0,0,W,H);
-      ctx.fillStyle='#202c26'; ctx.fillRect(0,0,W,H);
-      ctx.strokeStyle='#31443b'; ctx.lineWidth=1;
-      for(let x=50;x<W;x+=50){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-      for(let y=30;y<H;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
-      ctx.setLineDash([7,8]); ctx.strokeStyle='#5b705f'; ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);
-      tactics.draw(ctx);
-      for (const u of units.filter(u => alive(u) && u.type === 'aa')) {
-        ctx.save(); ctx.strokeStyle = u.team === 'blue' ? '#7399ff55' : '#ff8d9b55'; ctx.setLineDash([5,6]); ctx.lineWidth = 1;
-        ctx.beginPath();ctx.arc(u.x,u.y,config.aa.range,0,Math.PI*2);ctx.stroke();ctx.restore();
-      }
-      for (const u of units.filter(u => alive(u) && u.type === 'heli')) {
-        ctx.fillStyle = '#08110dcc'; ctx.beginPath();ctx.ellipse(u.x,u.y+16,15,4,0,0,Math.PI*2);ctx.fill();
-      }
-      for (const u of units.filter(alive)) if (u.shot) {
-        ctx.strokeStyle = u.shot.kind === 'heal' ? '#91efad' : u.shot.kind === 'missile' ? '#ffd873' : u.shot.kind === 'aa' ? '#d69cff' : u.team === 'blue' ? '#b5eaff' : '#ffd0cc';
-        ctx.globalAlpha = u.shot.time / (u.shot.kind === 'blast' ? .22 : .13); ctx.lineWidth = u.shot.kind === 'blast' ? 5 : 2;
-        ctx.beginPath(); ctx.moveTo(u.x,u.y); ctx.lineTo(u.shot.x,u.shot.y); ctx.stroke();
-        if (u.shot.kind === 'blast') { ctx.strokeStyle='#ffd873';ctx.lineWidth=2;ctx.beginPath();ctx.arc(u.shot.x,u.shot.y,u.shot.splash,0,Math.PI*2);ctx.stroke(); }
-        ctx.globalAlpha = 1;
-      }
-      for (const u of units.filter(alive)) {
-        const s=config[u.type], color=C[u.team];
-        ctx.save(); ctx.translate(u.x,u.y);
-        ctx.fillStyle = u.flash ? '#ffffff' : color; ctx.strokeStyle = u.team==='blue'?C.blueDark:C.redDark; ctx.lineWidth=2;
-        if(u.type==='assault') { ctx.beginPath();ctx.arc(0,0,s.radius,0,Math.PI*2);ctx.fill();ctx.stroke(); }
-        else if(u.type==='mg') { ctx.fillRect(-s.radius,-s.radius,s.radius*2,s.radius*2);ctx.strokeRect(-s.radius,-s.radius,s.radius*2,s.radius*2); }
-        else if(u.type==='grenadier') { ctx.rotate(Math.PI/4);ctx.fillRect(-s.radius,-s.radius,s.radius*2,s.radius*2);ctx.strokeRect(-s.radius,-s.radius,s.radius*2,s.radius*2); }
-        else if(u.type==='tank') { ctx.fillRect(-s.radius,-s.radius*.65,s.radius*2,s.radius*1.3);ctx.strokeRect(-s.radius,-s.radius*.65,s.radius*2,s.radius*1.3);ctx.fillRect(-3,-3,s.radius+7,6); }
-        else if(u.type==='at') { ctx.beginPath();ctx.moveTo(0,-s.radius);ctx.lineTo(s.radius,s.radius);ctx.lineTo(-s.radius,s.radius);ctx.closePath();ctx.fill();ctx.stroke(); }
-        else if(u.type==='heli') { ctx.fillRect(-s.radius,-4,s.radius*2,8);ctx.fillRect(-4,-s.radius,8,s.radius);ctx.strokeRect(-s.radius,-4,s.radius*2,8);ctx.beginPath();ctx.moveTo(-s.radius-8,-s.radius);ctx.lineTo(s.radius+8,-s.radius);ctx.stroke(); }
-        else if(u.type==='aa') { ctx.beginPath();ctx.moveTo(-s.radius,s.radius);ctx.lineTo(0,-s.radius);ctx.lineTo(s.radius,s.radius);ctx.stroke();ctx.beginPath();ctx.moveTo(0,-s.radius);ctx.lineTo(0,s.radius);ctx.stroke(); }
-        else { ctx.fillRect(-2,-s.radius,4,s.radius*2);ctx.fillRect(-s.radius,-2,s.radius*2,4); }
-        ctx.restore();
-        if (u.suppressed > 0) { ctx.strokeStyle='#c983ff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(u.x,u.y,s.radius+4,0,Math.PI*2);ctx.stroke(); }
-        const hp=Math.max(0,u.hp/u.maxHp);ctx.fillStyle='#091017';ctx.fillRect(u.x-12,u.y-18,24,3);ctx.fillStyle=hp>.35?'#8ee081':'#ffbd67';ctx.fillRect(u.x-12,u.y-18,24*hp,3);
-      }
-    }
-    function frame(time) { const dt=Math.min(.035,(time-lastTime)/1000||0); lastTime=time; if(running) update(dt); draw(); requestAnimationFrame(frame); }
-    document.querySelector('#start').onclick=()=>{ if (!units.length) reset(); if (units.some(u=>alive(u)&&u.team==='blue') && units.some(u=>alive(u)&&u.team==='red')) { running=true; result='交战中'; } };
-    document.querySelector('#reset').onclick=reset;
-    function selectZoneTool(type) {
-      tactics.select(type);
-      document.querySelectorAll('[data-zone]').forEach(button => button.classList.toggle('active', button.dataset.zone === type));
-      document.querySelector('#zoneStatus').textContent = window.Tactics.definitions[type].label + '：' + window.Tactics.definitions[type].hint;
-    }
-    document.querySelectorAll('[data-zone]').forEach(button => button.onclick = () => selectZoneTool(button.dataset.zone));
-    document.querySelector('#clearZones').onclick = () => { tactics.clear(); document.querySelector('#zoneStatus').textContent = '已清除区域。选择一种战术意图后点击战场。'; };
-    function eventPoint(event) {
-      const rect = canvas.getBoundingClientRect();
-      return { x: (event.clientX - rect.left) * W / rect.width, y: (event.clientY - rect.top) * H / rect.height };
-    }
-    canvas.addEventListener('click', event => {
-      const point = eventPoint(event); const zone = tactics.add(point.x, point.y);
-      document.querySelector('#zoneStatus').textContent = `已部署${window.Tactics.definitions[zone.type].label}（${tactics.zones.length}/3）。右键区域可移除。`;
-    });
-    canvas.addEventListener('contextmenu', event => {
-      event.preventDefault(); const point = eventPoint(event); tactics.removeAt(point.x, point.y);
-      document.querySelector('#zoneStatus').textContent = tactics.zones.length ? `当前 ${tactics.zones.length}/3 个战术区域。` : '已移除区域。';
-    });
-    reset(); requestAnimationFrame(frame);
-  </script>
-</body>
+          <h3>本轮范围</h3>
+          <p class="hint">
+            节点效果、通路移动代价、容量、补给和地形数值均未参与结算；只有边的连接关系与单向规则决定能否通行。
+          </p>
+        </aside>
+      </div>
+
+      <p class="footer">
+        相同种子会生成相同地图。路径计算和行军不依赖画布坐标；画布只是地图对象的可视化。
+      </p>
+    </main>
+
+    <script src="map-generator.js"></script>
+    <script src="campaign-core.js"></script>
+    <script src="campaign-ui.js"></script>
+  </body>
 </html>

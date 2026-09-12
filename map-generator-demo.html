@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>战役地图生成器</title>
+    <style>
+      body {
+        margin: 0;
+        background: #101820;
+        color: #e8eef5;
+        font: 14px Inter, "Microsoft YaHei", sans-serif;
+      }
+
+      main {
+        max-width: 1240px;
+        margin: auto;
+        padding: 22px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0 auto 0 0;
+        font-size: 22px;
+      }
+
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      input,
+      button {
+        padding: 7px;
+        border: 1px solid #405263;
+        border-radius: 6px;
+        color: #e8eef5;
+        font: inherit;
+        background: #172633;
+      }
+
+      input {
+        width: 72px;
+      }
+
+      button {
+        cursor: pointer;
+        color: #07131b;
+        font-weight: 700;
+        background: #62bfe8;
+      }
+
+      canvas {
+        width: 100%;
+        margin-top: 16px;
+        border: 1px solid #354b3d;
+        border-radius: 10px;
+        background: #203128;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 13px;
+        margin-top: 9px;
+        color: #b9c8d4;
+        font-size: 12px;
+      }
+
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 4px;
+        border-radius: 50%;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>战役地图生成器</h1>
+        <div class="bar">
+          兵团
+          <input id="corps" type="number" min="4" max="8" value="6" />
+          种子
+          <input id="seed" value="frontier-01" />
+          <button id="generate">生成地图</button>
+        </div>
+      </header>
+
+      <canvas id="map" width="1180" height="700"></canvas>
+      <p id="summary"></p>
+
+      <div class="legend">
+        <span><i style="background: #62bfe8"></i>蓝方</span>
+        <span><i style="background: #f17771"></i>红方</span>
+        <span><i style="background: #d8c37d"></i>中立</span>
+        <span>实线：双向通行　→：单向通道　粗线：桥/渡口/山口</span>
+      </div>
+    </main>
+
+    <script src="map-generator.js"></script>
+    <script>
+      const C = document.querySelector('#map');
+      const ctx = C.getContext('2d');
+      const colors = {
+        blue: '#62bfe8',
+        red: '#f17771',
+        neutral: '#d8c37d',
+      };
+      const symbols = {
+        headquarters: '◆',
+        deployment: '●',
+        town: '■',
+        urban: '▦',
+        industrial: '▤',
+        highland: '▲',
+        woodland: '♣',
+        lowland: '▽',
+        marsh: '≈',
+        crossroads: '✦',
+        railHub: '⊞',
+        supply: '✚',
+        fieldHospital: '✛',
+        airfield: '✈',
+        commandPost: '⚑',
+        observationPost: '◉',
+        fortification: '▰',
+        bridgehead: '⌁',
+        riverCrossing: '≋',
+        chokepoint: '◈',
+        objective: '★',
+      };
+
+      function draw(map) {
+        ctx.clearRect(0, 0, C.width, C.height);
+        ctx.fillStyle = '#203128';
+        ctx.fillRect(0, 0, C.width, C.height);
+
+        for (const edge of map.edges) {
+          const from = map.nodes.find((node) => node.id === edge.from);
+          const to = map.nodes.find((node) => node.id === edge.to);
+          const isMajorPassage =
+            edge.type === 'bridge' ||
+            edge.type === 'ford' ||
+            edge.type === 'pass';
+
+          ctx.strokeStyle = isMajorPassage ? '#78b4cb' : '#677969';
+          ctx.lineWidth = isMajorPassage ? 5 : 2;
+          ctx.setLineDash(edge.type === 'trail' ? [7, 5] : []);
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          if (edge.directed) {
+            const x = (from.x + to.x) / 2;
+            const y = (from.y + to.y) / 2;
+            const angle = Math.atan2(to.y - from.y, to.x - from.x);
+
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(8, 0);
+            ctx.lineTo(-5, -5);
+            ctx.lineTo(-5, 5);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+
+        for (const node of map.nodes) {
+          ctx.fillStyle = colors[node.team];
+          ctx.beginPath();
+          ctx.arc(
+            node.x,
+            node.y,
+            node.type === 'headquarters' ? 19 : 14,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+          ctx.strokeStyle = '#0c1517';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.fillStyle = '#102128';
+          ctx.font = 'bold 14px Inter';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(symbols[node.type], node.x, node.y + 1);
+          ctx.fillStyle = '#eef5e9';
+          ctx.font = '12px Microsoft YaHei';
+          ctx.fillText(node.name, node.x, node.y + 29);
+        }
+
+        document.querySelector('#summary').textContent =
+          `种子 ${map.seed} · ${map.playerCorps} 个可控兵团 · ${map.nodes.length} 个节点 · ${map.edges.length} 条通道 · 校验通过`;
+      }
+
+      function generate() {
+        const map = CampaignMapGenerator.generateMap({
+          playerCorps: +document.querySelector('#corps').value,
+          seed: document.querySelector('#seed').value,
+        });
+
+        draw(map);
+        window.currentCampaignMap = map;
+      }
+
+      document.querySelector('#generate').onclick = generate;
+      generate();
+    </script>
+  </body>
+</html>
