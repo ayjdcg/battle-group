@@ -132,6 +132,11 @@
         font-size: 11px;
       }
 
+      .group .roster {
+        color: #7f9bad;
+        line-height: 1.35;
+      }
+
       .map-card {
         overflow: hidden;
       }
@@ -205,6 +210,10 @@
         line-height: 1.45;
       }
 
+      .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+      .actions button { padding: 6px 8px; font-size: 11px; }
+      .actions button.danger { background: #f19a79; }
+
       .reachable {
         color: #87dfff;
       }
@@ -239,7 +248,7 @@
     <main>
       <h1>战役地图 · 兵团出击</h1>
       <p class="subtitle">
-        选择单位后点击目标节点；单位按路径逐点行军。先占据节点的一方会在敌军抵达时触发节点战斗。
+        选择兵团后点击目标节点；兵团按路径逐点行军。兵团内保留九个编制槽，满编与重装备混编会降低行军速度。
       </p>
 
       <div class="layout">
@@ -256,19 +265,20 @@
             <button id="start">开始战役</button>
           </div>
 
-          <h3>蓝方单位</h3>
+          <h3>蓝方兵团</h3>
           <div id="groups"></div>
           <p class="hint">
-            暂时一个单位就是一个可选、可移动、可交战的战役单位；后续可将此层替换为军团。所有单位初始部署于司令部。
+            地图上的选择、命令与行军对象均为兵团。每支兵团固定有 9 个槽位，单位数据保留在兵团内部；所有兵团初始部署于司令部。
           </p>
 
           <h3>当前命令</h3>
           <div class="log" id="log"></div>
+          <div class="actions" id="actions"></div>
           <div class="legend">
             <span class="reachable">亮边节点：当前选中单位可到达</span><br />
             实线：双向通路　箭头：只能从箭尾到箭头<br />
-            蓝圆：我方单位　红圆：敌方单位　交叉剑：节点战斗中<br />
-            速度决定每段通路所需时间；经过战斗节点会减速并承受损失。
+            蓝圆：我方兵团　红圆：敌方兵团　圆中数字：当前编制数<br />
+            速度由最慢单位、编制规模、补给、士气与下一段通路共同决定。
           </div>
         </aside>
 
@@ -290,9 +300,9 @@
             <dd>点击地图节点</dd>
           </dl>
 
-          <h3>本轮范围</h3>
+          <h3>P1 节点战役</h3>
           <p class="hint">
-            节点效果、通路移动代价、容量、补给和地形数值均未参与结算；只有边的连接关系与单向规则决定能否通行。
+            遭遇敌军时可选择战斗、加入战斗、强行通过、绕路或等待。战后不会自动占领：请指定一支兵团驻防，另一支即可继续推进。
           </p>
         </aside>
       </div>
