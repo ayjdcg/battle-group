@@ -57,24 +57,60 @@ const skirmishMap = {
 const skirmish = createCampaign(skirmishMap, [{ assault: 1 }]);
 const attacker = skirmish.units.find((unit) => unit.team === 'blue');
 assert.equal(orderMove(skirmish, attacker.id, 'objective').ok, true);
-startCampaign(skirmish);
+skirmish.started = true;
 
 const startPosition = unitPosition(skirmish, attacker);
 advance(skirmish, 0.2);
-assert.notDeepEqual(
+assert.equal(
+  attacker.segmentProgress > 0,
+  true,
+  'movement should accumulate travel time before the next node is reached',
+);
+assert.deepEqual(
   unitPosition(skirmish, attacker),
   startPosition,
-  'a started unit must visibly advance along its first edge',
+  'a moving unit should remain displayed at its current node until it arrives',
 );
-advance(skirmish, 0.3);
+for (let i = 0; i < 30; i++) advance(skirmish, 0.04);
 assert.ok(
   attacker.engagementId,
-  'opposing units on the same edge must stop for a meeting engagement',
+  'an arriving unit must start a battle at an occupied node',
 );
+const defender = skirmish.units.find(
+  (unit) => unit.team === 'red' && !unit.destroyed,
+);
+assert.equal(attacker.engagementId, defender.engagementId);
 
 for (let i = 0; i < 500; i++) advance(skirmish, 0.04);
 assert.ok(
   skirmish.units.some((unit) => unit.destroyed),
   'units at the same node should actually resolve combat',
 );
+
+const transitMap = {
+  nodes: [
+    { id: 'blue-hq', team: 'blue', x: 0, y: 0 },
+    { id: 'battle', team: 'red', type: 'objective', x: 100, y: 0 },
+    { id: 'far', team: 'neutral', x: 200, y: 0 },
+  ],
+  edges: [
+    { from: 'blue-hq', to: 'battle', directed: false },
+    { from: 'battle', to: 'far', directed: false },
+  ],
+};
+const transit = createCampaign(transitMap, [{ assault: 3 }]);
+const [lead, reinforcer, passer] = transit.units.filter((unit) => unit.team === 'blue');
+lead.hp = lead.maxHp = 10000; // Keep this fixture's battle active while the other unit crosses it.
+assert.equal(orderMove(transit, lead.id, 'battle').ok, true);
+transit.started = true;
+for (let i = 0; i < 30; i++) advance(transit, 0.04);
+assert.ok(lead.engagementId, 'the lead unit should be fighting at the node');
+assert.equal(orderMove(transit, reinforcer.id, 'battle').ok, true);
+for (let i = 0; i < 30; i++) advance(transit, 0.04);
+assert.equal(reinforcer.engagementId, lead.engagementId, 'a unit ordered to the battle node should reinforce it');
+assert.equal(orderMove(transit, passer.id, 'far').ok, true);
+const hpBeforeTransit = passer.hp;
+for (let i = 0; i < 130 && passer.nodeId !== 'far'; i++) advance(transit, 0.04);
+assert.equal(passer.nodeId, 'far', 'a unit ordered beyond a battle should pass through it');
+assert.ok(passer.hp < hpBeforeTransit, 'passing a battle should cause losses');
 console.log('campaign-core: connectivity and movement-order tests passed');

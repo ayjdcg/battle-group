@@ -12,6 +12,7 @@
     unitPosition,
     reachableNodeIds,
     enemiesAt,
+    battleNodeId,
   } = CampaignCore;
   const canvas = document.querySelector('#map');
   const ctx = canvas.getContext('2d');
@@ -57,13 +58,25 @@
 
   function visualPosition(unit) {
     const position = unitPosition(campaign, unit);
-    if (unit.path.length) return { x: position.x, y: position.y - 25 };
-
+    if (unit.engagementId) {
+      const peers = campaign.units.filter(
+        (item) =>
+          !item.destroyed &&
+          item.engagementId === unit.engagementId &&
+          item.team === unit.team,
+      );
+      const index = peers.findIndex((item) => item.id === unit.id);
+      const offset = (index - (peers.length - 1) / 2) * 13;
+      return {
+        x: position.x + offset,
+        y: position.y - 28 - (index % 2) * 13,
+      };
+    }
     const peers = campaign.units.filter(
       (item) =>
         !item.destroyed &&
         item.nodeId === unit.nodeId &&
-        !item.path.length,
+        !item.engagementId,
     );
     const index = peers.findIndex((item) => item.id === unit.id);
     return {
@@ -141,6 +154,8 @@
       ? `${unit.label}：${unit.status}${enemiesAt(campaign, unit).length ? '，正在自动交战' : ''}`
       : campaign.log;
 
+    renderBattleWindow();
+
     if (!selectedNodeId) return;
     const selected = node(selectedNodeId);
     const definition = campaign.map.definitions.nodes[selected.type];
@@ -153,6 +168,53 @@
       <dt>效果标签</dt><dd>${definition.effects.join(', ')}</dd>
       <dt>可达节点数</dt><dd>${reachableNodeIds(campaign.map, selected.id).size - 1}</dd>
     `;
+  }
+
+  function renderBattleWindow() {
+    const battles = [...new Set(
+      campaign.units.map(battleNodeId).filter(Boolean),
+    )];
+    const panel = el('#battle-window');
+    if (!battles.length) {
+      panel.hidden = true;
+      return;
+    }
+    const role = (unit) => {
+      const spec = UNITS[unit.type];
+      if (spec.heal) return `医疗 ${spec.heal}/${spec.cooldown}s`;
+      if (spec.antiAir) return `防空 ${spec.antiAir}/${spec.cooldown}s`;
+      if (spec.antiArmor) return `反装甲 ${spec.antiArmor}/${spec.cooldown}s`;
+      return `火力 ${spec.damage}/${spec.cooldown}s`;
+    };
+    const card = (nodeId) => {
+      const participants = campaign.units.filter(
+        (unit) => !unit.destroyed && battleNodeId(unit) === nodeId,
+      );
+      const side = (team) => participants.filter((unit) => unit.team === team);
+      const roster = (team) => side(team).map((unit) => {
+        const hp = Math.max(0, unit.hp / unit.maxHp * 100);
+        return `<div class="combatant"><span>${unit.label}</span><b>${Math.ceil(unit.hp)}</b><i><em style="width:${hp}%"></em></i><small>${role(unit)}</small></div>`;
+      }).join('') || '<div class="combatant empty">无参战单位</div>';
+      const event = campaign.battleEvents.find((item) => item.nodeId === nodeId);
+      const latest = !event
+        ? '双方正在接敌，等待首轮射击。'
+        : event.kind === 'heal'
+          ? `${event.source} 为 ${event.target} 恢复了 ${event.amount} HP`
+          : `${event.source} 命中 ${event.target}，造成 ${event.amount} 伤害`;
+      return `
+        <article class="battle-card">
+          <div class="battle-title">⚔ 节点战斗 · ${node(nodeId).name}</div>
+          <div class="battle-layout">
+            <section class="battle-team blue-team"><strong>蓝方 · ${side('blue').length} 支</strong>${roster('blue')}</section>
+            <div class="battle-center"><span>交战中</span><b>VS</b><small>自动攻击<br>按单位克制结算</small></div>
+            <section class="battle-team red-team"><strong>红方 · ${side('red').length} 支</strong>${roster('red')}</section>
+          </div>
+          <div class="battle-event">最新：${latest}</div>
+          <p>命令终点为此节点：加入战斗；只是途经：减速并损失 10% 最大生命。</p>
+        </article>`;
+    };
+    panel.hidden = false;
+    panel.innerHTML = battles.map(card).join('');
   }
 
   function drawEdge(edge) {
@@ -208,7 +270,7 @@
         0,
         Math.PI * 2,
       );
-      ctx.fillStyle = colors[currentNode.team];
+      ctx.fillStyle = colors[campaign.nodeControl[currentNode.id] || currentNode.team];
       ctx.fill();
       ctx.strokeStyle =
         currentNode.id === selectedNodeId
@@ -252,9 +314,15 @@
         position.y + 1,
       );
       if (enemiesAt(campaign, current).length) {
+        const barWidth = 22;
+        const hpRatio = Math.max(0, current.hp / current.maxHp);
+        ctx.fillStyle = '#081216';
+        ctx.fillRect(position.x - barWidth / 2, position.y - 20, barWidth, 4);
+        ctx.fillStyle = hpRatio > 0.5 ? '#8ee58b' : hpRatio > 0.25 ? '#ffd166' : '#ff665f';
+        ctx.fillRect(position.x - barWidth / 2, position.y - 20, barWidth * hpRatio, 4);
         ctx.fillStyle = '#fff4c7';
-        ctx.font = '16px serif';
-        ctx.fillText('⚔', position.x, position.y - 15);
+        ctx.font = '14px serif';
+        ctx.fillText('⚔', position.x, position.y - 27);
       }
     }
   }

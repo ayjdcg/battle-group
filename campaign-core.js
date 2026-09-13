@@ -20,14 +20,14 @@
   ];
 
   const UNITS = {
-    assault: { label: '突击步兵', hp: 118, damage: 12, cooldown: 0.62 },
-    mg: { label: '机枪组', hp: 82, damage: 6, cooldown: 0.22 },
-    grenadier: { label: '榴弹兵', hp: 72, damage: 19, cooldown: 1.45 },
-    tank: { label: '坦克', hp: 330, damage: 29, cooldown: 1.35 },
-    at: { label: '反坦克班', hp: 58, damage: 7, antiArmor: 120, cooldown: 1.2 },
-    heli: { label: '攻击直升机', hp: 112, damage: 18, antiArmor: 108, cooldown: 1.38 },
-    aa: { label: '防空班', hp: 70, damage: 0, antiAir: 34, cooldown: 0.58 },
-    medic: { label: '医疗兵', hp: 68, damage: 0, heal: 9, cooldown: 0.46 },
+    assault: { label: '突击步兵', hp: 118, damage: 12, cooldown: 0.62, speed: 1.05 },
+    mg: { label: '机枪组', hp: 82, damage: 6, cooldown: 0.22, speed: 0.82 },
+    grenadier: { label: '榴弹兵', hp: 72, damage: 19, cooldown: 1.45, speed: 0.9 },
+    tank: { label: '坦克', hp: 330, damage: 29, cooldown: 1.35, speed: 1.2 },
+    at: { label: '反坦克班', hp: 58, damage: 7, antiArmor: 120, cooldown: 1.2, speed: 0.78 },
+    heli: { label: '攻击直升机', hp: 112, damage: 18, antiArmor: 108, cooldown: 1.38, speed: 1.65 },
+    aa: { label: '防空班', hp: 70, damage: 0, antiAir: 34, cooldown: 0.58, speed: 0.8 },
+    medic: { label: '医疗兵', hp: 68, damage: 0, heal: 9, cooldown: 0.46, speed: 0.88 },
   };
 
   const DEFAULTS = [
@@ -116,6 +116,8 @@
       maxHp: spec.hp,
       nodeId,
       path: [],
+      destinationId: null,
+      passingBattleNodeId: null,
       segmentProgress: 0,
       cooldown: 0,
       status: '驻守',
@@ -168,6 +170,8 @@
       started: false,
       log: '部署单位并下达出击命令后，点击“开始战役”。',
       winner: null,
+      nodeControl: Object.fromEntries(map.nodes.map((node) => [node.id, node.team])),
+      battleEvents: [],
     };
   }
 
@@ -182,6 +186,7 @@
       const path = shortestPath(campaign.map, unit.nodeId, 'blue-hq');
       if (path && path.length > 1) {
         unit.path = path.slice(1);
+        unit.destinationId = 'blue-hq';
         unit.status = '向蓝方司令部推进';
         advancing++;
       } else {
@@ -193,7 +198,11 @@
     return true;
   }
 
-  const edgeKey = (a, b) => [a, b].sort().join('::');
+  function battleNodeId(unit) {
+    return unit.engagementId && unit.engagementId.startsWith('battle:')
+      ? unit.engagementId.slice('battle:'.length)
+      : null;
+  }
 
   function enemiesAt(campaign, unit) {
     return campaign.units.filter(
@@ -230,6 +239,7 @@
     if (path.length === 1) return { ok: false, reason: '单位已在该节点。' };
 
     unit.path = path.slice(1);
+    unit.destinationId = destinationId;
     unit.segmentProgress = 0;
     unit.status = `出击至 ${campaign.map.nodes.find((node) => node.id === destinationId).name}`;
     campaign.log = `${unit.label} 已出击（${path.length - 1} 段通路）。`;
@@ -248,8 +258,49 @@
     return spec.damage;
   }
 
+  function recordBattleEvent(campaign, source, target, amount, kind) {
+    const nodeId = battleNodeId(source);
+    if (!nodeId) return;
+    campaign.battleEvents.unshift({
+      time: campaign.elapsed,
+      nodeId,
+      source: source.label,
+      target: target.label,
+      amount: Math.round(amount),
+      kind,
+    });
+    campaign.battleEvents.length = Math.min(campaign.battleEvents.length, 80);
+  }
+
+  function beginNodeBattle(campaign, nodeId) {
+    const participants = campaign.units.filter(
+      (unit) => !unit.destroyed && unit.nodeId === nodeId,
+    );
+    if (new Set(participants.map((unit) => unit.team)).size < 2) return false;
+
+    const id = `battle:${nodeId}`;
+    for (const unit of participants) {
+      unit.engagementId = id;
+      unit.path = [];
+      unit.segmentProgress = 0;
+      unit.status = '节点战斗中';
+    }
+    campaign.log = `${campaign.map.nodes.find((node) => node.id === nodeId).name} 爆发战斗。`;
+    return true;
+  }
+
+  function nodeHasBattle(campaign, nodeId) {
+    return campaign.units.some(
+      (unit) => !unit.destroyed && battleNodeId(unit) === nodeId,
+    );
+  }
+
   function resolveNodeCombat(campaign, unit, dt) {
-    const enemies = enemiesAt(campaign, unit);
+    const enemies = unit.engagementId
+      ? campaign.units.filter(
+          (other) => !other.destroyed && other.team !== unit.team && other.engagementId === unit.engagementId,
+        )
+      : enemiesAt(campaign, unit);
     if (!enemies.length) return;
 
     unit.status = '交战中';
@@ -257,11 +308,14 @@
     const spec = UNITS[unit.type];
 
     if (unit.type === 'medic') {
-      const wounded = alliesAt(campaign, unit)
+      const wounded = (unit.engagementId
+        ? campaign.units.filter((ally) => !ally.destroyed && ally.team === unit.team && ally.engagementId === unit.engagementId && ally !== unit)
+        : alliesAt(campaign, unit))
         .filter((ally) => ally.hp < ally.maxHp)
         .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
       if (wounded && unit.cooldown <= 0) {
         wounded.hp = Math.min(wounded.maxHp, wounded.hp + spec.heal);
+        recordBattleEvent(campaign, unit, wounded, spec.heal, 'heal');
         unit.cooldown = spec.cooldown;
       }
       return;
@@ -270,12 +324,16 @@
     const target = enemies.sort((a, b) => damage(unit, b) - damage(unit, a))[0];
     if (target && unit.cooldown <= 0) {
       const hit = damage(unit, target);
-      if (hit) target.hp -= hit;
+      if (hit) {
+        target.hp -= hit;
+        recordBattleEvent(campaign, unit, target, hit, 'damage');
+      }
       unit.cooldown = spec.cooldown;
       if (target.hp <= 0) {
         target.hp = 0;
         target.destroyed = true;
         target.path = [];
+        target.destinationId = null;
         target.status = '已被击毁';
         campaign.log = `${unit.label} 击毁了敌方${target.label}。`;
       }
@@ -285,45 +343,35 @@
   function advance(campaign, dt) {
     if (!campaign.started || campaign.winner) return;
     campaign.elapsed += dt;
-    const moving = [];
-
     for (const unit of campaign.units.filter(
       (item) =>
         !item.destroyed &&
         !item.engagementId &&
         item.path.length &&
-        !enemiesAt(campaign, item).length,
+        (!enemiesAt(campaign, item).length || item.passingBattleNodeId === item.nodeId),
     )) {
-      moving.push({ unit, edge: edgeKey(unit.nodeId, unit.path[0]) });
-      unit.segmentProgress += dt * 1.1;
+      const crossingBattle = nodeHasBattle(campaign, unit.path[0]) && unit.path.length > 1;
+      unit.segmentProgress += dt * UNITS[unit.type].speed * (crossingBattle ? 0.35 : 1);
+      unit.status = crossingBattle ? '穿越战区（减速）' : '行军至下一节点';
     }
 
-    for (let i = 0; i < moving.length; i++) {
-      for (let j = i + 1; j < moving.length; j++) {
-        const a = moving[i];
-        const b = moving[j];
-        if (
-          a.unit.team !== b.unit.team &&
-          a.edge === b.edge &&
-          a.unit.segmentProgress + b.unit.segmentProgress >= 1
-        ) {
-          a.unit.engagementId = a.edge;
-          b.unit.engagementId = a.edge;
-          a.unit.segmentProgress = 0.5;
-          b.unit.segmentProgress = 0.5;
-          a.unit.status = '通路遭遇战';
-          b.unit.status = '通路遭遇战';
-          campaign.log = '双方单位在通路中相遇，开始交战。';
-        }
-      }
-    }
-
-    for (const move of moving) {
-      const unit = move.unit;
-      if (unit.engagementId || unit.segmentProgress < 1) continue;
+    for (const unit of campaign.units.filter((item) => !item.destroyed && !item.engagementId && item.path.length)) {
+      if (unit.segmentProgress < 1) continue;
       unit.nodeId = unit.path.shift();
       unit.segmentProgress = 0;
-      unit.status = unit.path.length ? '行军中' : '驻守';
+      if (nodeHasBattle(campaign, unit.nodeId) && unit.path.length) {
+        const loss = Math.max(1, Math.round(unit.maxHp * 0.1));
+        unit.hp = Math.max(1, unit.hp - loss);
+        unit.passingBattleNodeId = unit.nodeId;
+        unit.status = '已穿越战区';
+        campaign.log = `${unit.label} 穿越战斗中的节点，行军受阻并损失 ${loss} HP。`;
+      } else if (beginNodeBattle(campaign, unit.nodeId)) {
+        // The arriving unit and the units already occupying this point now fight.
+      } else {
+        unit.passingBattleNodeId = null;
+        campaign.nodeControl[unit.nodeId] = unit.team;
+        unit.status = unit.path.length ? '抵达节点，继续行军' : '驻守';
+      }
     }
 
     for (const unit of campaign.units.filter((item) => !item.destroyed)) {
@@ -339,7 +387,8 @@
       if (new Set(participants.map((unit) => unit.team)).size < 2) {
         for (const unit of participants) {
           unit.engagementId = null;
-          unit.status = unit.path.length ? '行军中' : '驻守';
+          campaign.nodeControl[unit.nodeId] = unit.team;
+          unit.status = unit.path.length ? '行军至下一节点' : '驻守';
         }
       }
     }
@@ -381,19 +430,10 @@
 
   function unitPosition(campaign, unit) {
     const current = campaign.map.nodes.find((node) => node.id === unit.nodeId);
-    if (unit.engagementId) {
-      const [a, b] = unit.engagementId
-        .split('::')
-        .map((id) => campaign.map.nodes.find((node) => node.id === id));
-      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    }
-    if (!unit.path.length) return { x: current.x, y: current.y };
-
-    const next = campaign.map.nodes.find((node) => node.id === unit.path[0]);
-    return {
-      x: current.x + (next.x - current.x) * unit.segmentProgress,
-      y: current.y + (next.y - current.y) * unit.segmentProgress,
-    };
+    if (battleNodeId(unit)) return { x: current.x, y: current.y };
+    // Movement is resolved over time, but represented as an order progressing
+    // between discrete map points. The marker jumps only after arrival.
+    return { x: current.x, y: current.y };
   }
 
   return {
@@ -410,5 +450,7 @@
     advance,
     unitPosition,
     enemiesAt,
+    battleNodeId,
+    nodeHasBattle,
   };
 });

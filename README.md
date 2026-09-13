@@ -18,11 +18,13 @@
 
 ## 运行
 
-项目没有第三方依赖和构建步骤。
+项目使用 Vite 提供本地开发服务器，游戏逻辑仍为原生 JavaScript。
 
-- 打开 `index.html`：运行当前完整 Demo；
-- 打开 `map-generator-demo.html`：只预览地图生成结果；
-- 执行 `node campaign-core.test.js`：运行核心规则测试。
+- 执行 `npm install`：安装开发依赖；
+- 执行 `npm run dev`：启动完整 Demo，并在终端显示的本地地址访问；
+- 执行 `npm test`：运行核心规则测试；
+- 执行 `npm run build`：生成可部署的静态文件到 `dist/`；
+- `map-generator-demo.html`：在开发服务器地址后直接访问该页面，仅预览地图生成结果。
 
 ## 当前玩法
 
