@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { generateMap } = require('./map-generator.js');
-const { MAX_CORPS_SLOTS, DEFAULTS, shortestPath, reachableNodeIds, createCampaign, startCampaign, orderMove, advance, unitPosition, corpsStats, corpsSpeed, encounterOptions, resolveEncounter, setGarrison, battleAt } = require('./campaign-core.js');
+const { MAX_CORPS_SLOTS, DEFAULTS, BATTLE_DAMAGE_SCALE, BATTLE_COOLDOWN_SCALE, shortestPath, reachableNodeIds, centerlinePath, createCampaign, startCampaign, orderMove, advance, unitPosition, corpsStats, corpsSpeed, encounterOptions, resolveEncounter, setGarrison, battleAt, formationRow } = require('./campaign-core.js');
 
 for (const seed of ['alpha', 'river', 'campaign-42']) {
   const map = generateMap({ seed, playerCorps: 6 });
@@ -13,6 +13,12 @@ for (const seed of ['alpha', 'river', 'campaign-42']) {
   assert.ok(campaign.corps.every((corps) => corps.units.length <= MAX_CORPS_SLOTS));
   startCampaign(campaign);
   assert.ok(campaign.corps.some((corps) => corps.team === 'red' && corps.path.length), `${seed}: enemy corps should receive an advance path`);
+  const center = centerlinePath(map);
+  assert.ok(center, `${seed}: a three-lane map should expose a central test route`);
+  for (const red of campaign.corps.filter((corps) => corps.team === 'red')) {
+    assert.equal(red.nodeId, center.deploymentId, `${seed}: test enemy must assemble on the central line`);
+    assert.deepEqual(red.path, center.path, `${seed}: test enemy must not choose a side-lane route`);
+  }
   const objective = map.nodes.find((node) => node.type === 'objective' && node.team === 'red');
   assert.equal(orderMove(campaign, campaign.corps.find((corps) => corps.team === 'blue').id, objective.id).ok, true);
 }
@@ -31,9 +37,9 @@ const [small, full] = movement.corps.filter((corps) => corps.team === 'blue');
 assert.equal(corpsStats(full).size, 9);
 assert.ok(corpsSpeed(full, movementMap) < corpsSpeed(small, movementMap), 'a full corps must be slower than a small corps');
 assert.equal(corpsStats(full).slowestUnitSpeed, 0.78, 'the slowest constituent unit limits corps speed');
-full.supply = 20; full.morale = 20;
-assert.ok(corpsSpeed(full, movementMap) < 0.78 * 0.78, 'supply and morale must reduce movement speed');
-full.supply = full.morale = 100;
+full.morale = 20;
+assert.ok(corpsSpeed(full, movementMap) < 0.78 * 0.78, 'low morale must reduce movement speed');
+full.morale = 100;
 assert.equal(orderMove(movement, small.id, 'far').ok, true);
 movement.started = true;
 const startPosition = unitPosition(movement, small);
@@ -72,5 +78,38 @@ assert.equal(battle.active, false, 'a battle resolves once one side has no survi
 assert.equal(setGarrison(contact, contactCorps.id, true).ok, true, 'one winner may be assigned to occupy the node');
 assert.equal(contact.nodeControl.contact, 'blue');
 assert.equal(setGarrison(contact, contactCorps.id, false).ok, true, 'a garrison can be released to continue advancing');
+
+// Combat is resolved by individual unit actions, not a hidden total-power score.
+// This verifies the most important P1 counters: anti-tank fire and medical recovery.
+const counterMap = {
+  nodes: [{ id: 'blue-hq', team: 'blue', type: 'headquarters', x: 0, y: 0 }, { id: 'contact', team: 'red', type: 'objective', x: 100, y: 0 }],
+  edges: [{ from: 'blue-hq', to: 'contact', type: 'road', directed: false }],
+  definitions: { edges: { road: { moveCost: 1 } }, nodes: { headquarters: { capacity: 2, effects: [] }, objective: { capacity: 1, effects: [] } } },
+};
+const counters = createCampaign(counterMap, [{ at: 1, assault: 1, medic: 1 }]);
+const blueCounter = counters.corps.find((corps) => corps.team === 'blue');
+const redCounter = counters.corps.find((corps) => corps.team === 'red');
+const redTank = redCounter.units[0];
+redTank.type = 'tank'; redTank.label = '坦克'; redTank.hp = redTank.maxHp = 330;
+blueCounter.nodeId = redCounter.nodeId = 'contact';
+blueCounter.pendingEncounter = true;
+assert.equal(resolveEncounter(counters, blueCounter.id, 'battle').ok, true);
+counters.started = true;
+const initialTankHp = redTank.hp;
+for (const unit of redCounter.units) unit.cooldown = 1;
+const woundedAssault = blueCounter.units.find((unit) => unit.type === 'assault');
+woundedAssault.hp = 50;
+advance(counters, 0.04);
+assert.ok(redTank.hp < initialTankHp - 40, 'an anti-tank team must deal its anti-armor damage to a tank');
+assert.ok(woundedAssault.hp > 50, 'a medic must heal the most wounded friendly unit');
+assert.ok(battleAt(counters, 'contact').visualEvents.some((event) => event.kind === 'attack'), 'the battle view must receive attack links');
+assert.ok(battleAt(counters, 'contact').visualEvents.some((event) => event.kind === 'heal'), 'the battle view must receive healing links');
+assert.equal(formationRow(redTank), 'frontline', 'tanks automatically screen the formation from the frontline');
+assert.equal(formationRow(blueCounter.units.find((unit) => unit.type === 'at')), 'support', 'anti-tank teams automatically deploy in the support row');
+assert.equal(formationRow(blueCounter.units.find((unit) => unit.type === 'medic')), 'rear', 'medics automatically deploy behind the frontline');
+const antiTankLink = battleAt(counters, 'contact').visualEvents.find((event) => event.kind === 'attack' && event.attackerId.includes('-at-'));
+assert.equal(antiTankLink.targetId, redTank.id, 'a support unit fires through its own frontline but targets the exposed enemy frontline');
+assert.ok(BATTLE_DAMAGE_SCALE < 1 && BATTLE_COOLDOWN_SCALE > 1, 'combat pacing must leave time to read each exchange');
+assert.equal(Object.hasOwn(blueCounter, 'supply'), false, 'P1 corps must not carry a supply stat before logistics exists');
 
 console.log('campaign-core: corps structure and movement tests passed');

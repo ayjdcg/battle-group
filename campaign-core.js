@@ -7,6 +7,17 @@
   'use strict';
 
   const MAX_CORPS_SLOTS = 9;
+  // Deliberately cinematic rather than real-time: the battle view needs enough
+  // time for players to read target selection and role counters.
+  const BATTLE_DAMAGE_SCALE = 0.65;
+  const BATTLE_COOLDOWN_SCALE = 1.8;
+  const BATTLE_EFFECT_DURATION = 0.42;
+  const FORMATION_ROWS = {
+    frontline: { label: '前列', rank: 0 },
+    support: { label: '支援列', rank: 1 },
+    rear: { label: '后卫', rank: 2 },
+    air: { label: '空中层', rank: -1 },
+  };
   const UNIT_TYPES = ['assault', 'mg', 'grenadier', 'tank', 'at', 'heli', 'aa', 'medic'];
   const UNITS = {
     assault: { label: '突击步兵', hp: 118, damage: 12, cooldown: 0.62, speed: 1.05 },
@@ -101,10 +112,18 @@
     const units = [], normalized = normalizeRoster(roster);
     for (const type of UNIT_TYPES) for (let n = 0; n < normalized[type]; n++) units.push(makeUnit(`${id}-${type}-${n + 1}`, team, type));
     return { id, team, label, slots: [...units, ...Array(MAX_CORPS_SLOTS - units.length).fill(null)], units,
-      morale: 100, supply: 100, nodeId, destinationId: null, path: [], segmentProgress: 0,
+      morale: 100, nodeId, destinationId: null, path: [], segmentProgress: 0,
       status: '待命', destroyed: false, engagementId: null, garrisoning: false, pendingEncounter: false };
   }
   function activeUnits(corps) { return corps.units.filter((unit) => !unit.destroyed && unit.hp > 0); }
+  // Slots are roster capacity, not player-authored coordinates. This role map is
+  // the single source of truth for both combat screening and battle rendering.
+  function formationRow(unit) {
+    if (unit.type === 'heli') return 'air';
+    if (unit.type === 'tank' || unit.type === 'assault') return 'frontline';
+    if (unit.type === 'mg' || unit.type === 'grenadier' || unit.type === 'at') return 'support';
+    return 'rear';
+  }
   function corpsStats(corps) {
     const units = activeUnits(corps);
     const hp = units.reduce((sum, unit) => sum + unit.hp, 0);
@@ -121,7 +140,9 @@
   }
   function corpsSpeed(corps, map) {
     const stats = corpsStats(corps);
-    const readiness = 0.6 + 0.4 * ((clamp(corps.supply, 0, 100) + clamp(corps.morale, 0, 100)) / 200);
+    // P1 deliberately has no logistics layer. Morale represents a corps' immediate
+    // cohesion only; ammunition and resupply return when the logistics loop exists.
+    const readiness = 0.7 + 0.3 * (clamp(corps.morale, 0, 100) / 100);
     return stats.slowestUnitSpeed * stats.sizeFactor * readiness * (map ? terrainSpeedFactor(map, corps) : 1);
   }
 
@@ -132,23 +153,35 @@
       corps.push(makeCorps(`red-corps-${index + 1}`, 'red', `红方第${index + 1}兵团`, guards[index % guards.length], node.id));
     });
     for (const guard of corps.filter((item) => item.team === 'red')) { guard.garrisoning = true; guard.status = '驻防待命'; }
-    return { map, corps, elapsed: 0, started: false, log: '部署兵团并下达出击命令后，点击“开始战役”。', winner: null,
+    return { map, corps, enemyMode: 'centerline-test', elapsed: 0, started: false, log: '配置测试兵团并下达行军命令后，点击“开始战役”。', winner: null,
       nodeControl: Object.fromEntries(map.nodes.map((node) => [node.id, node.team])), engagements: [], nextEngagementId: 1 };
   }
   function corpsAt(campaign, corps) {
     return campaign.corps.filter((other) => !other.destroyed && other.team !== corps.team && other.nodeId === corps.nodeId);
   }
   const enemiesAt = corpsAt;
+  // Test mode deliberately removes the AI's cross-lane choices. All red corps
+  // deploy at the central objective and use this authored corridor, so a combat
+  // test cannot be ended by an accidental side-lane breakthrough.
+  function centerlinePath(map) {
+    const middle = map.nodes.filter((node) => node.lane === 1).sort((a, b) => b.column - a.column);
+    if (!middle.length) return null;
+    return { deploymentId: middle[0].id, path: [...middle.slice(1).map((node) => node.id), 'blue-hq'] };
+  }
   function startCampaign(campaign) {
     if (campaign.started) return false;
     campaign.started = true;
     let advancing = 0;
+    const centerline = campaign.enemyMode === 'centerline-test' ? centerlinePath(campaign.map) : null;
     for (const corps of campaign.corps.filter((item) => item.team === 'red' && !item.destroyed)) {
-      const path = shortestPath(campaign.map, corps.nodeId, 'blue-hq');
+      if (centerline) corps.nodeId = centerline.deploymentId;
+      const path = centerline ? [corps.nodeId, ...centerline.path] : shortestPath(campaign.map, corps.nodeId, 'blue-hq');
       if (path && path.length > 1) { corps.path = path.slice(1); corps.destinationId = 'blue-hq'; corps.status = '向蓝方司令部推进'; advancing++; }
       else corps.status = '等待命令';
     }
-    campaign.log = `战役开始：敌军 ${advancing} 支兵团正向蓝方司令部推进。`;
+    campaign.log = centerline
+      ? `测试战役开始：敌军 ${advancing} 支兵团已在中央线集结，将沿中路直进。`
+      : `战役开始：敌军 ${advancing} 支兵团正向蓝方司令部推进。`;
     return true;
   }
   function orderMove(campaign, corpsId, destinationId) {
@@ -179,7 +212,7 @@
     const existing = battleAt(campaign, nodeId); if (existing) return existing;
     // A battle is shared by every corps at this node.  This makes local force
     // concentration meaningful without requiring global blue/red force parity.
-    const battle = { id: `battle-${campaign.nextEngagementId++}`, nodeId, active: true, elapsed: 0, lastEvent: '交战双方正在展开。', blueIds: engagedIds(campaign, nodeId, 'blue'), redIds: engagedIds(campaign, nodeId, 'red') };
+    const battle = { id: `battle-${campaign.nextEngagementId++}`, nodeId, active: true, elapsed: 0, blueIds: engagedIds(campaign, nodeId, 'blue'), redIds: engagedIds(campaign, nodeId, 'red'), visualEvents: [] };
     campaign.engagements.push(battle);
     for (const corps of campaign.corps.filter((item) => battle.blueIds.includes(item.id) || battle.redIds.includes(item.id))) { corps.engagementId = battle.id; corps.pendingEncounter = false; corps.path = []; corps.destinationId = null; corps.status = '节点战斗中'; }
     return battle;
@@ -188,13 +221,80 @@
     const ids = team === 'blue' ? battle.blueIds : battle.redIds;
     return ids.map((id) => campaign.corps.find((corps) => corps.id === id)).filter((corps) => corps && !corps.destroyed && corps.nodeId === battle.nodeId);
   }
-  function combatPower(corps) {
-    return activeUnits(corps).reduce((total, unit) => total + UNITS[unit.type].damage / UNITS[unit.type].cooldown, 0) * (0.55 + corps.morale / 200) * (0.55 + corps.supply / 200);
+  function destroyIfEmpty(corps) { if (!activeUnits(corps).length) corps.destroyed = true; }
+  function canTarget(attacker, target) {
+    if (attacker.type === 'medic') return false;
+    if (target.type === 'heli') return attacker.type === 'aa';
+    return attacker.type !== 'aa';
   }
-  function applyDamage(corps, amount) {
-    const units = activeUnits(corps); let remaining = amount;
-    for (const unit of units) { const share = remaining / Math.max(1, units.filter((item) => !item.destroyed).length); unit.hp -= share; remaining -= share; if (unit.hp <= 0) { unit.hp = 0; unit.destroyed = true; } }
-    if (!activeUnits(corps).length) corps.destroyed = true;
+  function damageAgainst(attacker, target) {
+    const spec = UNITS[attacker.type];
+    if (!canTarget(attacker, target)) return 0;
+    if (target.type === 'heli') return spec.antiAir || 0;
+    if (target.type === 'tank') return spec.antiArmor || (spec.damage * 0.3);
+    return spec.damage;
+  }
+  function exposedTargets(attacker, defenders) {
+    const candidates = defenders.flatMap((corps) => activeUnits(corps).map((unit) => ({ corps, unit, damage: damageAgainst(attacker, unit) })))
+      .filter((item) => item.damage > 0);
+    if (!candidates.length) return [];
+    if (attacker.type === 'aa') return candidates;
+    const ground = candidates.filter((item) => formationRow(item.unit) !== 'air');
+    if (!ground.length) return [];
+    // Ground formations screen their own support and rear units. Helicopters
+    // can look over that screen to hunt armor, but otherwise hit the front.
+    if (attacker.type === 'heli') {
+      const armored = ground.filter((item) => item.unit.type === 'tank');
+      return armored.length ? armored : ground;
+    }
+    const closestRank = Math.min(...ground.map((item) => FORMATION_ROWS[formationRow(item.unit)].rank));
+    return ground.filter((item) => FORMATION_ROWS[formationRow(item.unit)].rank === closestRank);
+  }
+  function unitCorps(campaign, battle, team) {
+    // Reserves remain at the node but do not enter the formation until front
+    // capacity opens; they therefore cannot deal or receive battle damage.
+    return availableByTeam(campaign, battle, team).slice(0, nodeCapacity(campaign, battle.nodeId));
+  }
+  function terrainDamageFactor(campaign, battle, attacker, defender) {
+    const effects = nodeDefinition(campaign, battle.nodeId).effects;
+    const defenderControlsNode = campaign.nodeControl[battle.nodeId] === defender.team;
+    let factor = 1;
+    if (defenderControlsNode && effects.includes('cover')) factor *= 0.86;
+    if (defenderControlsNode && effects.includes('defend')) factor *= 0.76;
+    if (campaign.nodeControl[battle.nodeId] === attacker.team && effects.includes('fireAdvantage')) factor *= 1.15;
+    return factor;
+  }
+  function fireAtTarget(campaign, battle, attackerCorps, attacker, defenders) {
+    const candidates = exposedTargets(attacker, defenders)
+      .sort((a, b) => b.damage - a.damage || (a.unit.hp / a.unit.maxHp) - (b.unit.hp / b.unit.maxHp) || a.unit.id.localeCompare(b.unit.id));
+    if (!candidates.length) return null;
+    const target = candidates[0];
+    const moraleFactor = 0.55 + clamp(attackerCorps.morale, 0, 100) / 200;
+    const damage = target.damage * moraleFactor * terrainDamageFactor(campaign, battle, attackerCorps, target.corps) * BATTLE_DAMAGE_SCALE;
+    target.unit.hp = Math.max(0, target.unit.hp - damage);
+    target.corps.morale = Math.max(0, target.corps.morale - (damage / target.unit.maxHp) * 10);
+    if (target.unit.hp === 0) target.unit.destroyed = true;
+    destroyIfEmpty(target.corps);
+    return { kind: 'attack', attackerId: attacker.id, targetId: target.unit.id, power: damage };
+  }
+  function healFriendly(medicCorps, medic, friendlies) {
+    // Medical units intentionally ignore formation rows: they represent a
+    // corps-level casualty response rather than a ranged attack through ranks.
+    const target = friendlies.flatMap((corps) => activeUnits(corps).filter((unit) => unit.id !== medic.id && unit.hp < unit.maxHp).map((unit) => ({ corps, unit })))
+      .sort((a, b) => (a.unit.hp / a.unit.maxHp) - (b.unit.hp / b.unit.maxHp) || a.unit.id.localeCompare(b.unit.id))[0];
+    if (!target) return null;
+    target.unit.hp = Math.min(target.unit.maxHp, target.unit.hp + UNITS.medic.heal);
+    return { kind: 'heal', attackerId: medic.id, targetId: target.unit.id, power: UNITS.medic.heal };
+  }
+  function advanceFront(campaign, battle, team, events) {
+    const friends = unitCorps(campaign, battle, team), enemies = unitCorps(campaign, battle, team === 'blue' ? 'red' : 'blue');
+    for (const corps of friends) for (const unit of activeUnits(corps)) unit.cooldown -= battle.step;
+    for (const corps of friends) for (const unit of activeUnits(corps)) {
+      if (unit.cooldown > 0) continue;
+      const event = unit.type === 'medic' ? healFriendly(corps, unit, friends) : fireAtTarget(campaign, battle, corps, unit, enemies);
+      unit.cooldown += UNITS[unit.type].cooldown * BATTLE_COOLDOWN_SCALE;
+      if (event) events.push(event);
+    }
   }
   function retreatTarget(campaign, corps) {
     return outgoingEdges(campaign.map, corps.nodeId).map((edge) => nextNode(edge, corps.nodeId)).find((id) => campaign.nodeControl[id] === corps.team && !campaign.corps.some((item) => !item.destroyed && item.team !== corps.team && item.nodeId === id));
@@ -206,28 +306,32 @@
       if (team === winner) { removeFromBattle(campaign, corps); corps.status = '战斗胜利，等待命令'; }
       else {
         const target = retreatTarget(campaign, corps);
-        if (target) { corps.nodeId = target; corps.morale = Math.max(0, corps.morale - 25); corps.supply = Math.max(0, corps.supply - 15); removeFromBattle(campaign, corps); corps.status = '战斗失利，已撤退'; }
+        if (target) { corps.nodeId = target; corps.morale = Math.max(0, corps.morale - 25); removeFromBattle(campaign, corps); corps.status = '战斗失利，已撤退'; }
         else { corps.destroyed = true; removeFromBattle(campaign, corps); }
       }
     }
-    battle.lastEvent = `${winner === 'blue' ? '蓝方' : '红方'}获胜；败方撤退或溃散。`;
-    campaign.log = `${campaign.map.nodes.find((node) => node.id === battle.nodeId).name}：${battle.lastEvent} 请指定兵团驻防以占领节点。`;
+    campaign.log = `${campaign.map.nodes.find((node) => node.id === battle.nodeId).name}：${winner === 'blue' ? '蓝方' : '红方'}获胜；败方撤退或溃散。请指定兵团驻防以占领节点。`;
   }
   function advanceBattles(campaign, dt) {
     for (const battle of campaign.engagements.filter((item) => item.active)) {
       battle.elapsed += dt;
       const blue = availableByTeam(campaign, battle, 'blue'), red = availableByTeam(campaign, battle, 'red');
-      if (!blue.length || !red.length) { finishBattle(campaign, battle, blue.length ? 'blue' : 'red'); continue; }
+      for (const corps of [...blue, ...red]) destroyIfEmpty(corps);
+      const livingBlue = blue.filter((corps) => !corps.destroyed), livingRed = red.filter((corps) => !corps.destroyed);
+      if (!livingBlue.length || !livingRed.length) { finishBattle(campaign, battle, livingBlue.length ? 'blue' : 'red'); continue; }
       // Capacity applies per side: extra corps are reserves, not free damage.
       // Chokepoints can therefore let a smaller defender resist a larger force.
-      const capacity = nodeCapacity(campaign, battle.nodeId), blueFront = blue.slice(0, capacity), redFront = red.slice(0, capacity);
-      const defense = nodeDefinition(campaign, battle.nodeId).effects.includes('defend') || nodeDefinition(campaign, battle.nodeId).effects.includes('cover') ? 0.75 : 1;
-      const bluePower = blueFront.reduce((sum, corps) => sum + combatPower(corps), 0);
-      const redPower = redFront.reduce((sum, corps) => sum + combatPower(corps), 0) * (campaign.nodeControl[battle.nodeId] === 'red' ? defense : 1);
-      for (const corps of redFront) applyDamage(corps, dt * bluePower / redFront.length * 0.33);
-      for (const corps of blueFront) applyDamage(corps, dt * redPower / blueFront.length * 0.33);
-      for (const corps of [...blueFront, ...redFront]) { corps.morale = Math.max(0, corps.morale - dt * 1.3); corps.supply = Math.max(0, corps.supply - dt * 0.8); }
-      battle.lastEvent = `前线投入：蓝 ${blueFront.length}/${blue.length}，红 ${redFront.length}/${red.length}${blue.length > capacity || red.length > capacity ? '；其余为预备队' : ''}。`;
+      const capacity = nodeCapacity(campaign, battle.nodeId), blueFront = livingBlue.slice(0, capacity), redFront = livingRed.slice(0, capacity);
+      battle.step = dt;
+      const events = [];
+      advanceFront(campaign, battle, 'blue', events);
+      advanceFront(campaign, battle, 'red', events);
+      // Rule events are retained briefly as render data. The UI never derives
+      // combat outcomes itself, so effects and health always agree.
+      battle.visualEvents = [
+        ...battle.visualEvents.filter((event) => event.until > battle.elapsed),
+        ...events.map((event) => ({ ...event, until: battle.elapsed + BATTLE_EFFECT_DURATION })),
+      ].slice(-30);
       if (!blueFront.some((corps) => !corps.destroyed) || !redFront.some((corps) => !corps.destroyed)) finishBattle(campaign, battle, blueFront.some((corps) => !corps.destroyed) ? 'blue' : 'red');
     }
   }
@@ -252,10 +356,8 @@
     if (!corps || !corps.pendingEncounter) return { ok: false, reason: '当前没有待处理的节点遭遇。' };
     const place = campaign.map.nodes.find((node) => node.id === corps.nodeId).name;
     if (choice === 'battle' || choice === 'join') { const battle = createBattle(campaign, corps.nodeId); if (!battle.blueIds.includes(corps.id)) battle.blueIds.push(corps.id); corps.engagementId = battle.id; corps.pendingEncounter = false; corps.path = []; corps.destinationId = null; corps.status = '节点战斗中'; campaign.log = `${corps.label} 在${place}${choice === 'join' ? '加入战斗' : '发起战斗'}。`; return { ok: true }; }
-    // P1's fixed pass-through loss is deliberately provisional.  P2 should
-    // replace it with a context-sensitive interception rule so rushing cannot
-    // dominate fighting for nodes and supply routes.
-    if (choice === 'pass' && corps.path.length) { for (const unit of activeUnits(corps)) unit.hp *= 0.90; corps.morale = Math.max(0, corps.morale - 12); corps.supply = Math.max(0, corps.supply - 10); corps.pendingEncounter = false; corps.status = '强行通过战区'; campaign.log = `${corps.label} 强行通过${place}，承受 10% 兵力、12 士气和 10 补给损失。`; return { ok: true }; }
+    // Passing a hostile node is a tactical decision, not a logistics tax.
+    if (choice === 'pass' && corps.path.length) { for (const unit of activeUnits(corps)) unit.hp *= 0.90; corps.morale = Math.max(0, corps.morale - 12); corps.pendingEncounter = false; corps.status = '强行通过战区'; campaign.log = `${corps.label} 强行通过${place}，承受 10% 兵力与 12 士气损失。`; return { ok: true }; }
     if (choice === 'bypass') { const path = findBypass(campaign, corps); if (!path) return { ok: false, reason: '没有可用的绕路。' }; corps.path = path; corps.pendingEncounter = false; corps.status = '正在绕过敌军节点'; campaign.log = `${corps.label} 正绕过${place}。`; return { ok: true }; }
     if (choice === 'wait') { corps.path = []; corps.destinationId = null; corps.pendingEncounter = false; corps.status = '遭遇后等待'; campaign.log = `${corps.label} 在${place}停止等待。`; return { ok: true }; }
     return { ok: false, reason: '该遭遇选项当前不可用。' };
@@ -269,9 +371,9 @@
     // while the remaining corps are free to exploit a local breakthrough.
     corps.garrisoning = true; corps.path = []; corps.destinationId = null; corps.status = '驻防并占领节点'; campaign.nodeControl[corps.nodeId] = 'blue';
     const effects = nodeDefinition(campaign, corps.nodeId).effects;
-    const supplyGain = effects.includes('resupply') || effects.includes('supply') ? 35 : effects.includes('control') ? 18 : 8;
-    corps.supply = Math.min(100, corps.supply + supplyGain); if (effects.includes('recover') || effects.includes('repair')) corps.morale = Math.min(100, corps.morale + 12);
-    campaign.log = `${corps.label} 驻防${campaign.map.nodes.find((node) => node.id === corps.nodeId).name}，节点已归蓝方控制（补给 +${supplyGain}）。`;
+    const moraleGain = effects.includes('recover') || effects.includes('repair') ? 12 : effects.includes('control') ? 6 : 3;
+    corps.morale = Math.min(100, corps.morale + moraleGain);
+    campaign.log = `${corps.label} 驻防${campaign.map.nodes.find((node) => node.id === corps.nodeId).name}，节点已归蓝方控制（士气 +${moraleGain}）。`;
     return { ok: true };
   }
   function orderRetreat(campaign, corpsId) {
@@ -308,7 +410,7 @@
     const current = campaign.map.nodes.find((node) => node.id === corps.nodeId);
     return { x: current.x, y: current.y };
   }
-  return { MAX_CORPS_SLOTS, UNIT_TYPES, UNITS, DEFAULTS, normalizeRoster, rosterSize, sizeSpeedFactor, corpsStats, corpsSpeed,
-    shortestPath, shortestPathAvoiding, reachableNodeIds, createCampaign, startCampaign, orderMove, advance, unitPosition, enemiesAt, corpsAt, activeUnits,
-    encounterOptions, resolveEncounter, setGarrison, orderRetreat, battleAt, nodeCapacity };
+  return { MAX_CORPS_SLOTS, UNIT_TYPES, UNITS, DEFAULTS, BATTLE_DAMAGE_SCALE, BATTLE_COOLDOWN_SCALE, FORMATION_ROWS, normalizeRoster, rosterSize, sizeSpeedFactor, corpsStats, corpsSpeed,
+    shortestPath, shortestPathAvoiding, reachableNodeIds, centerlinePath, createCampaign, startCampaign, orderMove, advance, unitPosition, enemiesAt, corpsAt, activeUnits,
+    formationRow, encounterOptions, resolveEncounter, setGarrison, orderRetreat, battleAt, nodeCapacity };
 });

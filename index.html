@@ -137,6 +137,18 @@
         line-height: 1.35;
       }
 
+      .setup-corps { margin: 8px 0; padding: 9px; border: 1px solid #40576a; border-radius: 7px; background: #101b25; font-size: 11px; }
+      .setup-corps > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+      .setup-corps strong { color: #d9edf8; }
+      .setup-corps button { padding: 2px 6px; font-size: 12px; }
+      .setup-corps .remove-corps { background: #7893a5; }
+      .unit-steps { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 8px 0; }
+      .unit-step { display: grid; grid-template-columns: minmax(0, 1fr) 22px 16px 22px; align-items: center; gap: 3px; color: #9fb4c3; }
+      .unit-step span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+      .unit-step b { text-align: center; color: #e8eef5; }
+      .route-plan { display: block; color: #a9bac8; }
+      .route-plan select { width: 100%; margin-top: 4px; padding: 4px; color: #e8eef5; background: #111c27; border: 1px solid #40586b; border-radius: 5px; }
+
       .map-card {
         overflow: hidden;
       }
@@ -223,25 +235,28 @@
         z-index: 5;
         right: 28px;
         bottom: 26px;
-        width: 520px;
+        width: 600px;
         max-height: calc(100vh - 52px);
         overflow-y: auto;
       }
 
       .battle-card { margin-bottom: 10px; padding: 13px; border: 1px solid #e3a65a; border-radius: 10px; background: #18222cf2; box-shadow: 0 15px 45px #000b; }
       .battle-card:last-child { margin-bottom: 0; }
-      .battle-title { margin-bottom: 10px; color: #ffe0aa; font-weight: 700; }
-      .battle-layout { display: grid; grid-template-columns: 1fr 74px 1fr; gap: 7px; align-items: stretch; }
-      .battle-team { padding: 7px; border-radius: 6px; background: #0d1720; }
-      .battle-team > strong { display: block; margin-bottom: 5px; font-size: 11px; }
-      .blue-team > strong { color: #75d9ff; } .red-team > strong { color: #ff9992; }
-      .combatant { display: grid; grid-template-columns: 1fr 28px; gap: 2px 5px; margin: 6px 0; color: #d9e6ed; font-size: 10px; }
-      .combatant b { text-align: right; } .combatant i { grid-column: 1 / -1; height: 4px; overflow: hidden; border-radius: 4px; background: #344452; }
-      .combatant em { display: block; height: 100%; background: #8edc8b; } .combatant small { grid-column: 1 / -1; color: #8298aa; font-size: 9px; }
-      .combatant.empty { display: block; color: #8298aa; }.battle-center { display:flex; flex-direction:column; align-items:center; justify-content:center; color:#ffdfaa; text-align:center; font-size:10px; }
-      .battle-center b { margin: 3px 0; font-size: 17px; } .battle-center small { color:#97aaba; font-size:9px; line-height:1.35; }
-      .battle-event { margin-top: 9px; padding: 7px; border-left: 3px solid #e3a65a; background: #111c26; color: #d8e2e5; font-size: 11px; }
-      .battle-card p { margin: 8px 0 0; color: #9bafbd; font-size: 10px; line-height: 1.4; }
+      .battle-title { display: flex; justify-content: space-between; margin-bottom: 8px; color: #ffe0aa; font-weight: 700; }
+      .battle-title small { color: #9bafbd; font-size: 10px; font-weight: 400; }
+      .battle-arena { overflow: hidden; border: 1px solid #394b58; border-radius: 8px; background: radial-gradient(ellipse at center, #253a33 0%, #101c22 68%); }
+      .battle-arena svg { display: block; width: 100%; height: 260px; }
+      .battle-side-label { fill: #b7c9d6; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+      .battle-row-label { fill: #718690; font-size: 8px; letter-spacing: 1px; }
+      .battle-unit-symbol { fill: #eef6f7; font-size: 18px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+      .battle-unit-hp { fill: #7fd392; }
+      .battle-unit-hp-bg { fill: #16242b; }
+      .battle-unit-outline { fill: #102029; stroke-width: 2; }
+      .battle-unit-label { fill: #b8c7cd; font-size: 8px; text-anchor: middle; }
+      .battle-fire { stroke: #ffc65a; stroke-linecap: round; animation: battlePulse .42s ease-out; }
+      .battle-heal { stroke: #79e6a2; stroke-linecap: round; stroke-dasharray: 5 3; animation: battlePulse .42s ease-out; }
+      .battle-card p { margin: 7px 0 0; color: #9bafbd; font-size: 10px; line-height: 1.4; }
+      @keyframes battlePulse { from { opacity: 1; } to { opacity: .22; } }
     </style>
   </head>
   <body>
@@ -271,6 +286,12 @@
             地图上的选择、命令与行军对象均为兵团。每支兵团固定有 9 个槽位，单位数据保留在兵团内部；所有兵团初始部署于司令部。
           </p>
 
+          <h3>测试编组与行军</h3>
+          <p class="hint">开战前可调整多个兵团的单位槽，并为每支兵团预设一个目标。调整编组会重建未开战的测试局，并重新计算预设路线。</p>
+          <div id="test-setup"></div>
+          <button id="add-corps" type="button">新增测试兵团</button>
+          <p class="hint">测试 AI 已锁定：红方在中央线集结，仅沿中路向我方司令部推进，不会从两翼绕行。</p>
+
           <h3>当前命令</h3>
           <div class="log" id="log"></div>
           <div class="actions" id="actions"></div>
@@ -278,7 +299,7 @@
             <span class="reachable">亮边节点：当前选中单位可到达</span><br />
             实线：双向通路　箭头：只能从箭尾到箭头<br />
             蓝圆：我方兵团　红圆：敌方兵团　圆中数字：当前编制数<br />
-            速度由最慢单位、编制规模、补给、士气与下一段通路共同决定。
+        速度由最慢单位、编制规模、士气与下一段通路共同决定。
           </div>
         </aside>
 
@@ -302,7 +323,7 @@
 
           <h3>P1 节点战役</h3>
           <p class="hint">
-            遭遇敌军时可选择战斗、加入战斗、强行通过、绕路或等待。战后不会自动占领：请指定一支兵团驻防，另一支即可继续推进。
+            遭遇敌军时可选择战斗、加入战斗、强行通过、绕路或等待。交战会按单位的射速、克制与治疗逐次结算；战后不会自动占领，请指定一支兵团驻防。
           </p>
         </aside>
       </div>
