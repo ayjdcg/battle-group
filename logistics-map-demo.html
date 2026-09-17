@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>后勤指挥游戏 · 战区态势图（交互原型）</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: #0c1210; color: #e8eee9; font-family: "Microsoft YaHei", Inter, sans-serif; }
+      #app { display: flex; flex-direction: column; height: 100vh; }
+
+      .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid #26362f; background: #101715; }
+      .topbar h1 { font-size: 17px; margin: 0; letter-spacing: .06em; }
+      .topbar .sub { color: #8fb9a4; font-size: 12px; margin-top: 2px; }
+      .topbar button { background: #75d498; color: #0c1a12; border: 0; border-radius: 6px; font-weight: 800; padding: 10px 18px; cursor: pointer; font-size: 13px; }
+      .topbar button:disabled { opacity: .4; cursor: not-allowed; }
+      .note { padding: 8px 20px; font-size: 12px; color: #9aac9f; background: #0f1815; border-bottom: 1px dashed #26362f; }
+      .note b { color: #d8c98a; }
+
+      .flow-overview { padding: 10px 20px 12px; border-bottom: 1px solid #26362f; background: #0d1512; }
+      .flow-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+      .flow-title strong { color: #dce9df; font-size: 12px; letter-spacing: .08em; }
+      .flow-title span { color: #73877b; font-size: 11px; }
+      .flow-lane { display: grid; grid-template-columns: minmax(150px, 1fr) 22px minmax(190px, 1.2fr) 22px minmax(150px, 1fr); align-items: stretch; }
+      .flow-card { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px 10px; border: 1px solid #293b32; border-radius: 6px; background: #101a16; }
+      .flow-card-focus { border-color: #4f8168; background: #13231c; box-shadow: inset 0 0 0 1px rgba(117,212,152,.08); }
+      .flow-card b { color: #edf6ef; font-size: 13px; }
+      .flow-card small, .personnel-lane small { color: #80978a; font-size: 10px; }
+      .flow-kicker { color: #8fc0a5; font-size: 10px; letter-spacing: .08em; }
+      .flow-arrow { display: grid; place-items: center; color: #5d8a73; }
+      .personnel-lane { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding: 7px 10px; border-radius: 6px; background: #111916; color: #aebfb5; font-size: 11px; }
+      .personnel-lane b { color: #dce9df; }
+      .personnel-arrow { color: #557666; }
+      .personnel-separator { width: 1px; height: 14px; margin: 0 2px; background: #33483d; }
+      .personnel-lane small { margin-left: auto; }
+
+      .layout { flex: 1; display: flex; min-height: 0; }
+      #map-wrap { flex: 1; position: relative; padding: 10px; min-width: 0; }
+      #map-svg { width: 100%; height: 100%; display: block; }
+
+      .node-base rect.hull { fill: #14211b; stroke: #3a5748; stroke-width: 2; }
+      .bar-track { fill: #0b1512; stroke: #26372f; }
+      .bar-fill-ammo { fill: #ee8067; }
+      .bar-fill-supply { fill: #75c9d4; }
+      .node-label { fill: #cdd9d0; font-size: 12px; }
+      .node-sub { fill: #8fb9a4; font-size: 10px; }
+      .transit-mark { fill: #16211d; stroke: #3a5748; stroke-width: 1.5; }
+      .transit-label { fill: #6f8c7c; font-size: 10px; }
+
+      .edge-visible { fill: none; stroke-linecap: round; }
+      .edge-rail { stroke: #d98a5f; }
+      .edge-road { stroke: #5f9f86; }
+      .edge-visible.hovered { filter: drop-shadow(0 0 4px rgba(255,255,255,.5)); }
+      .edge-hit { fill: none; stroke: transparent; stroke-width: 20; cursor: pointer; pointer-events: stroke; }
+      .hazard-mark { fill: #d98a5f; font-size: 13px; }
+
+      .convoy { fill: #ffe9a8; stroke: #7a5b1c; stroke-width: 1; animation: convoy-pulse 1.6s ease-in-out infinite; }
+      .convoy-badge { pointer-events: none; }
+      .convoy-badge rect { fill: #17251f; stroke: #557666; stroke-width: 1; }
+      .convoy-badge text { fill: #dce9df; font-size: 9px; }
+      @keyframes convoy-pulse { 0%, 100% { opacity: .75; } 50% { opacity: 1; } }
+
+      .ring-bg { fill: none; stroke: #223028; stroke-width: 8; }
+      .ring-fg { fill: none; stroke-width: 8; stroke-linecap: round; transition: stroke-dasharray .35s ease; }
+      .division-node { cursor: pointer; }
+      .division-node:hover .ring-bg { stroke: #2c4438; }
+      .attack-glow { fill: none; stroke: #ff5f4d; stroke-width: 3; opacity: .3; animation: attack-pulse 1.1s ease-in-out infinite; }
+      @keyframes attack-pulse { 0%, 100% { opacity: .18; stroke-width: 3; } 50% { opacity: .75; stroke-width: 6; } }
+      .division-name { fill: #edf6ef; font-size: 13px; font-weight: 700; }
+      .division-posture { fill: #cfe0d4; font-size: 11px; }
+      .division-detail { fill: #9db3a5; font-size: 10px; }
+      .division-pct { fill: #fff; font-size: 13px; font-weight: 800; }
+      .personality-chip rect { rx: 4; }
+      .personality-chip text { font-size: 10px; font-weight: 700; }
+      .stale-note { fill: #6f8c7c; font-size: 9px; font-style: italic; }
+
+      #dock { width: 300px; flex-shrink: 0; border-left: 1px solid #26362f; background: #0f1613; display: flex; flex-direction: column; min-height: 0; }
+      .dock-section { padding: 12px 14px; border-bottom: 1px solid #1d2a24; }
+      .dock-section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: #8fb9a4; margin: 0 0 8px; }
+      #ticker { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+      .ticker-item { min-width: 0; overflow-wrap: anywhere; padding: 7px 9px; margin-bottom: 6px; background: #0b1512; border-left: 2px solid #5aaa7a; font-size: 12px; line-height: 1.5; font-family: "Consolas", monospace; animation: ticker-in .25s ease; }
+      .ticker-item.counterfactual { border-left-color: #f1b36d; color: #f1d9ae; }
+      @keyframes ticker-in { from { opacity: 0; transform: translateX(6px); } to { opacity: 1; transform: none; } }
+      .ticker-day { color: #75d498; font-weight: 700; margin-right: 4px; }
+      .muted { color: #7d9186; font-size: 12px; }
+
+      .hq-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+      .hq-row input, .hq-row select { width: 84px; background: #0b1512; border: 1px solid #33493d; border-radius: 4px; color: #edf6ef; padding: 5px 6px; font-size: 12px; }
+
+      .legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #9db3a5; margin: 4px 0; }
+      .legend-swatch { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
+
+      #popover { position: fixed; width: 250px; background: #131f1a; border: 1px solid #3a5748; border-radius: 8px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45); z-index: 20; }
+      #popover header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      #popover h3 { font-size: 13px; margin: 0; }
+      #popover .close { background: none; border: 0; color: #9db3a5; font-size: 16px; cursor: pointer; line-height: 1; }
+      #popover .pop-sub { color: #8fb9a4; font-size: 11px; margin: 0 0 10px; }
+      #popover label { display: block; font-size: 12px; color: #cdd9d0; margin: 8px 0 4px; }
+      #popover input[type="range"] { width: 100%; }
+      #popover input[type="number"] { width: 100%; background: #0b1512; border: 1px solid #33493d; border-radius: 4px; color: #edf6ef; padding: 5px; }
+      #popover .rowline { display: flex; justify-content: space-between; font-size: 12px; }
+      #popover .rowline b { color: #ffe9a8; }
+      #popover .checkline { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; }
+
+      @media (max-width: 760px) {
+        #app { height: auto; min-height: 100vh; }
+        .flow-lane { grid-template-columns: 1fr; gap: 6px; }
+        .flow-arrow { transform: rotate(90deg); }
+        .personnel-lane small { width: 100%; margin-left: 0; }
+        .layout { flex-direction: column; min-height: 780px; }
+        #map-wrap { min-height: 520px; }
+        #dock { width: 100%; border-left: 0; border-top: 1px solid #26362f; }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module" src="/logistics-map-ui.js"></script>
+  </body>
+</html>

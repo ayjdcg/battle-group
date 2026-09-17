@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>后勤指挥游戏 · 原型</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", sans-serif; background: #101715; color: #e8eee9; }
+      * { box-sizing: border-box; } body { margin: 0; } main { max-width: 1280px; margin: auto; padding: 24px; }
+      header, .panel-title, .command-row, .metric { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      header { border-bottom: 1px solid #355247; padding-bottom: 18px; } h1 { margin: 0; font-size: 23px; letter-spacing: .08em; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: #8fb9a4; margin: 0; }
+      button { background: #75d498; color: #102117; border: 0; border-radius: 6px; font-weight: 800; padding: 10px 16px; cursor: pointer; } button:disabled { opacity: .45; cursor: not-allowed; }
+      .grid { display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; margin-top: 16px; } .panel { border: 1px solid #294136; border-radius: 9px; padding: 16px; background: #16211d; }
+      .wide { grid-column: 1 / -1; } .division { padding: 13px 0; border-top: 1px solid #294136; } .division:first-of-type { border-top: 0; } .combat { border-left: 3px solid #ee8067; padding-left: 10px; }
+      .bar { height: 8px; border-radius: 999px; background: #293b33; overflow: hidden; margin: 8px 0; } .bar > i { display: block; height: 100%; background: #70d59a; } .danger > i { background: #ed886f; }
+      .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; color: #bfd0c3; font-size: 13px; } .stats b { display:block; color: #fff; font-size: 16px; margin-top: 3px; }
+      .metric { padding: 8px 0; border-top: 1px solid #294136; } .metric:first-of-type { border-top: 0; } .muted, small { color: #9aac9f; } .warning { color: #f1b36d; }
+      .command-row { display:grid; grid-template-columns: 105px 1fr 1fr 1fr 70px 86px; margin: 10px 0; font-size: 13px; } input, select { min-width:0; width:100%; background:#0e1713; border:1px solid #426654; border-radius:5px; color:#edf6ef; padding:7px; }
+      label { display: grid; gap: 4px; color:#aebfb3; } .line-note { font-size:12px; color:#aebfb3; } #reports { max-height:260px; overflow:auto; display:grid; gap:8px; } .report { padding:10px; background:#101a15; border-left:2px solid #5aaa7a; font-size:13px; line-height:1.5; }
+      #convoys { display:grid; gap:7px; font-size:13px; } .tag { color:#74d39b; font-weight:700; } @media(max-width: 800px) { .grid { grid-template-columns:1fr; } .command-row { grid-template-columns: 1fr 1fr 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module" src="/logistics-ui.js"></script>
+  </body>
+</html>
