@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { MAP } = require('./logistics-constants.js');
 const {
   advanceDay,
   advanceQueues,
@@ -12,6 +13,7 @@ const {
   decidePosture,
   dispatchShipments,
   dispatchConfiguredShipments,
+  planConfiguredShipments,
   perceive,
   sendWoundedToHospital,
   generateDailyReport,
@@ -25,7 +27,10 @@ function assertClose(actual, expected) {
 }
 
 const state = createInitialState();
-const advanceDayWithoutDispatch = (gameState) => advanceDay(gameState, { dispatchConfigured: false });
+const advanceDayWithoutDispatch = (gameState) => advanceDay(gameState, {
+  dispatchConfigured: false,
+  campaignScript: false,
+});
 
 assert.equal(state.day, 0);
 assert.equal(state.divisions.length, 3);
@@ -46,8 +51,8 @@ dispatchShipments(transitState, [{
 
 assert.equal(transitState.day, 1);
 assert.equal(transitState.transitQueue.length, 1);
-assert.equal(transitState.divisions[0].ammoDays, 0);
-assert.equal(transitState.divisions[0].supplyDays, 0);
+assertClose(transitState.divisions[0].ammoDays, 7.8);
+assertClose(transitState.divisions[0].supplyDays, 5.9);
 
 transitState.divisions[0].posture = 'defend';
 transitState.day = 2;
@@ -56,9 +61,9 @@ advanceQueues(transitState);
 assert.equal(transitState.day, 2);
 assert.equal(transitState.transitQueue.length, 0);
 // M3 converts D cargo to the receiving division's current daily-use units.
-assertClose(transitState.divisions[0].ammoDays, 0.15);
-assertClose(transitState.divisions[0].supplyDays, 0.2);
-assert.equal(transitState.divisions[1].ammoDays, 0);
+assertClose(transitState.divisions[0].ammoDays, 7.95);
+assertClose(transitState.divisions[0].supplyDays, 6.1);
+assertClose(transitState.divisions[1].ammoDays, 7.8);
 
 console.log('logistics-core: M1 transit timing tests passed');
 
@@ -217,17 +222,25 @@ console.log('logistics-core: M5 personnel-loop tests passed');
 
 const battleState = createInitialState();
 const battleDivision = battleState.divisions[0];
+battleState.day = 6;
 battleDivision.ammoDays = 0;
 battleDivision.supplyDays = 5;
 battleDivision.underAttack = true;
+battleState.battlePreview.push({ id: 'known-request', divisionId: 'div-1', day: 6 });
+battleState.frontRequests.push({
+  id: 'known-request', divisionId: 'div-1', announcedDay: 3, battleDay: 6,
+  requestedAmmo: 0.6, deliveredAmmo: 0.2, shipmentIds: [],
+});
 const battleResults = resolveBattles(battleState);
 assert.equal(battleResults.length, 1);
 assert.ok(battleResults[0].casualties > 0);
-assert.ok(battleResults[0].counterfactual);
-assert.ok(battleResults[0].counterfactual.casualtyRateReduction > 0);
+assert.equal(battleDivision.frontPosition, -8);
+assert.ok(battleDivision.equipmentReady < 1);
 generateDailyReport(battleState, battleResults);
 assert.match(battleState.eventLog[0].text, /弹药于交战第 1 日耗尽/);
-assert.match(battleState.eventLog[1].text, /若多留 2 天弹药储备/);
+assert.match(battleState.eventLog[1].text, /战前公开申请弹药 0.6 D/);
+assert.match(battleState.eventLog[1].text, /不判定调度对错/);
+assert.doesNotMatch(battleState.eventLog[1].text, /若.*改发/);
 
 const previewState = createInitialState();
 previewState.day = 4;
@@ -235,14 +248,14 @@ const preview = scheduleBattle(previewState, 'div-2');
 assert.equal(preview.day, 7);
 assert.equal(previewState.battlePreview.length, 1);
 
-console.log('logistics-core: M6 battle, attribution, and counterfactual tests passed');
+console.log('logistics-core: M6 battle, persistent-front, and fair-attribution tests passed');
 
 const infoState = createInitialState();
 assert.equal(infoState.divisions[0].lastReportSnapshot.day, 0);
 infoState.divisions[0].ammoDays = 9;
 advanceDayWithoutDispatch(infoState);
 assert.equal(infoState.divisions[0].lastReportSnapshot.day, 0);
-assert.equal(infoState.divisions[0].lastReportSnapshot.ammoDays, 0);
+assert.equal(infoState.divisions[0].lastReportSnapshot.ammoDays, 8);
 advanceDayWithoutDispatch(infoState);
 assert.equal(infoState.divisions[0].lastReportSnapshot.day, 1);
 assertClose(infoState.divisions[0].lastReportSnapshot.ammoDays, 8.8);
@@ -273,6 +286,10 @@ const configuredDispatchState = createInitialState();
 assert.deepEqual(Object.keys(configuredDispatchState.orders.lineRatios['line-rail']).sort(), ['ammo', 'supply']);
 configuredDispatchState.orders.dailyShipmentCap = 1;
 configuredDispatchState.orders.divisionPriority = { 'div-1': 3, 'div-2': 0, 'div-3': 0 };
+const inventoryBeforePreview = { ...configuredDispatchState.base };
+const previewedShipments = planConfiguredShipments(configuredDispatchState);
+assert.equal(previewedShipments.length, 1);
+assert.deepEqual(configuredDispatchState.base, inventoryBeforePreview);
 const configuredShipments = dispatchConfiguredShipments(configuredDispatchState);
 assert.equal(configuredShipments.length, 1);
 assert.equal(configuredShipments[0].lineId, 'line-rail');
@@ -285,19 +302,68 @@ truthState.orders.briefTruth[truthDivision.id] = true;
 assertClose(perceive(truthState, truthDivision).ammoDays, 4);
 
 const playableState = createInitialState();
-for (let index = 0; index < 30; index += 1) {
+while (!playableState.ended) {
   advanceDay(playableState);
 }
-assert.equal(playableState.day, 30);
 assert.equal(playableState.ended, true);
+assert.ok(playableState.campaign.result);
+
+const unattendedState = createInitialState();
+while (!unattendedState.ended) {
+  advanceDay(unattendedState, { dispatchConfigured: false });
+}
+assert.equal(unattendedState.campaign.result.code, 'defeat');
+assert.ok(unattendedState.day <= 30);
+assert.ok(unattendedState.divisions.some((division) => division.frontPosition < 0));
+
+const responsiveState = createInitialState();
+for (const line of MAP.lines) {
+  responsiveState.orders.lineRatios[line.id] = { ammo: 1, supply: 0 };
+}
+while (!responsiveState.ended) {
+  const feasibleRequest = responsiveState.frontRequests
+    .filter((request) => {
+      const line = MAP.lines.find((candidate) => candidate.divisionId === request.divisionId);
+      return responsiveState.day + 1 + line.transitDays <= request.battleDay;
+    })
+    .sort((left, right) => left.battleDay - right.battleDay)[0];
+  responsiveState.orders.divisionPriority = { 'div-1': 1, 'div-2': 1, 'div-3': 1 };
+  if (feasibleRequest) {
+    responsiveState.orders.divisionPriority = { 'div-1': 0, 'div-2': 0, 'div-3': 0 };
+    responsiveState.orders.divisionPriority[feasibleRequest.divisionId] = 10;
+  }
+  advanceDay(responsiveState);
+}
+assert.equal(responsiveState.day, 30);
+assert.notEqual(responsiveState.campaign.result.code, 'defeat');
+assert.ok(responsiveState.frontRequests.some((request) => request.deliveredAmmo >= request.requestedAmmo));
 
 console.log('logistics-core: M8 rule-based dispatch tests passed');
 
 const mapUiSource = fs.readFileSync(require.resolve('./logistics-map-ui.js'), 'utf8');
-assert.match(mapUiSource, /后勤流动总览/);
+assert.match(mapUiSource, /今日发运单/);
+assert.match(mapUiSource, /发运摘要/);
+assert.match(mapUiSource, /打开发运单/);
+assert.match(mapUiSource, /可用库存/);
+assert.match(mapUiSource, /本日实际装载/);
+assert.match(mapUiSource, /data-priority-step/);
+assert.match(mapUiSource, /全部在途运输/);
+assert.match(mapUiSource, /transit-dock/);
+assert.match(mapUiSource, /还有.*天/);
 assert.match(mapUiSource, /在途物资/);
 assert.match(mapUiSource, /人员流转/);
 assert.match(mapUiSource, /人员不占物资车队运力/);
+assert.match(mapUiSource, /前线公开请求/);
+assert.match(mapUiSource, /不是配额或百分比/);
+assert.match(mapUiSource, /发运窗口已关闭/);
+assert.match(mapUiSource, /效能 \$\{Math\.round\(effectiveness \* 100\)\}%/);
+assert.match(mapUiSource, /综合效能计算过程/);
+assert.match(mapUiSource, /满编率 × 弹药档位 × 装备 × 抗疲劳 × 整编系数/);
+assert.match(mapUiSource, /点击查看逐项计算/);
+assert.match(mapUiSource, /今日待发车队/);
+assert.match(mapUiSource, /不改变该线的发运份额、配额，也绝不改动已经在途的批次/);
+assert.match(mapUiSource, /frontPosition/);
+assert.match(mapUiSource, /campaign\.result/);
 assert.doesNotMatch(mapUiSource, /人员预留占比/);
 
-console.log('logistics-map-ui: transit-first information hierarchy contract tests passed');
+console.log('logistics-map-ui: map-first dispatch and transit-progress contract tests passed');

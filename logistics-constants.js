@@ -51,6 +51,26 @@
     { min: 0, delayDays: 5, effPenalty: 0.8 },
   ];
   const GAME_LENGTH_DAYS = 30;
+  const INITIAL_FRONT_RESERVE_DAYS = { ammo: 8, supply: 6 };
+  const CRITICAL_FRONT_POSITION = -12;
+  const BREAKTHROUGH_FRONT_POSITION = -18;
+  const FAILED_FRONTS_FOR_DEFEAT = 2;
+  const DIVISION_COLLAPSE_MANPOWER_RATIO = 0.2;
+
+  // Deterministic pressure script for the first balance pass. Each request is
+  // public three days before battle, so post-battle attribution can use only
+  // information the player actually had when issuing dispatch orders.
+  const CAMPAIGN_BATTLE_SCRIPT = [
+    { id: 'battle-d6-div1', announcedDay: 3, day: 6, divisionId: 'div-1', requestedAmmo: 0.6 },
+    { id: 'battle-d8-div2', announcedDay: 5, day: 8, divisionId: 'div-2', requestedAmmo: 0.6 },
+    { id: 'battle-d11-div3', announcedDay: 8, day: 11, divisionId: 'div-3', requestedAmmo: 0.5 },
+    { id: 'battle-d14-div1', announcedDay: 11, day: 14, divisionId: 'div-1', requestedAmmo: 0.7 },
+    { id: 'battle-d17-div2', announcedDay: 14, day: 17, divisionId: 'div-2', requestedAmmo: 0.7 },
+    { id: 'battle-d20-div3', announcedDay: 17, day: 20, divisionId: 'div-3', requestedAmmo: 0.6 },
+    { id: 'battle-d23-div1', announcedDay: 20, day: 23, divisionId: 'div-1', requestedAmmo: 0.8 },
+    { id: 'battle-d26-div2', announcedDay: 23, day: 26, divisionId: 'div-2', requestedAmmo: 0.8 },
+    { id: 'battle-d29-div3', announcedDay: 26, day: 29, divisionId: 'div-3', requestedAmmo: 0.7 },
+  ];
 
   // A division's local stock is displayed in days, while shipments and base
   // inventory use D. This is the fixed conversion baseline for the demo.
@@ -77,10 +97,10 @@
   const INFO_DELAY_DAYS = { normal: 1, inCombat: 2 };
   const ENEMY_EFFECTIVENESS = 0.7;
   const BATTLE_OUTCOME_TABLE = [
-    { minRatio: 1.5, label: '大胜', frontMovement: 8, casualtyRate: 0.02 },
-    { minRatio: 1.0, label: '小胜', frontMovement: 3, casualtyRate: 0.04 },
-    { minRatio: 0.7, label: '小败', frontMovement: -3, casualtyRate: 0.08 },
-    { minRatio: 0, label: '大败', frontMovement: -8, casualtyRate: 0.15 },
+    { minRatio: 1.5, label: '大胜', frontMovement: 8, casualtyRate: 0.02, equipmentLossRate: 0.01 },
+    { minRatio: 1.0, label: '小胜', frontMovement: 3, casualtyRate: 0.04, equipmentLossRate: 0.02 },
+    { minRatio: 0.7, label: '小败', frontMovement: -3, casualtyRate: 0.08, equipmentLossRate: 0.05 },
+    { minRatio: 0, label: '大败', frontMovement: -8, casualtyRate: 0.15, equipmentLossRate: 0.1 },
   ];
   // Temporary linear curve from the implementation plan's M3 assumptions.
   const POSTURE_FATIGUE_CHANGE = {
@@ -121,6 +141,12 @@
     HOSPITAL_OVERFLOW_DEATH_MULT,
     INTEGRATION_LADDER,
     GAME_LENGTH_DAYS,
+    INITIAL_FRONT_RESERVE_DAYS,
+    CRITICAL_FRONT_POSITION,
+    BREAKTHROUGH_FRONT_POSITION,
+    FAILED_FRONTS_FOR_DEFEAT,
+    DIVISION_COLLAPSE_MANPOWER_RATIO,
+    CAMPAIGN_BATTLE_SCRIPT,
     DIVISION_SAFE_RESERVE_DAYS,
     POSTURE_CONSUMPTION_MULT,
     AMMO_TIER,

@@ -40,6 +40,12 @@
     BATTLE_PREVIEW_LEAD_DAYS,
     INFO_DELAY_DAYS,
     GAME_LENGTH_DAYS,
+    INITIAL_FRONT_RESERVE_DAYS,
+    CRITICAL_FRONT_POSITION,
+    BREAKTHROUGH_FRONT_POSITION,
+    FAILED_FRONTS_FOR_DEFEAT,
+    DIVISION_COLLAPSE_MANPOWER_RATIO,
+    CAMPAIGN_BATTLE_SCRIPT,
     ENEMY_EFFECTIVENESS,
     BATTLE_OUTCOME_TABLE,
     DIVISION_PERSONALITY_PRESETS,
@@ -52,13 +58,18 @@
       personality: { ...personality },
       posture: 'defend',
       manpowerRatio: 1,
-      ammoDays: 0,
-      supplyDays: 0,
+      ammoDays: INITIAL_FRONT_RESERVE_DAYS.ammo,
+      supplyDays: INITIAL_FRONT_RESERVE_DAYS.supply,
       fatigue: 0,
       equipmentReady: 1,
       integrationEffPenalty: 1,
       underAttack: false,
       frontMovement: 0,
+      frontPosition: 0,
+      casualtiesTotal: 0,
+      battles: [],
+      collapsed: false,
+      lowAmmoDays: 0,
       quietDays: 0,
       lastReportDay: 0,
       lastReportSnapshot: null,
@@ -113,7 +124,13 @@
       },
       battlePreview: [],
       eventLog: [],
-      counterfactualCache: {},
+      frontRequests: [],
+      campaign: {
+        status: 'ongoing',
+        result: null,
+        reason: null,
+        endedDay: null,
+      },
     };
     refreshInfoSnapshot(state);
     return state;
@@ -131,6 +148,10 @@
       integrationEffPenalty: division.integrationEffPenalty,
       underAttack: division.underAttack,
       frontMovement: division.frontMovement,
+      frontPosition: division.frontPosition,
+      casualtiesTotal: division.casualtiesTotal,
+      collapsed: division.collapsed,
+      lowAmmoDays: division.lowAmmoDays,
     };
   }
 
@@ -274,20 +295,57 @@
       0,
       1,
     );
+    division.lowAmmoDays = ammoTierOf(division).collapseAfterDays
+      ? division.lowAmmoDays + 1
+      : 0;
+    if (division.lowAmmoDays >= 3) {
+      division.collapsed = true;
+    }
 
     return { ammo: ammoConsumed, supply: supplyConsumed, spike: division.underAttack };
   }
 
-  function scheduleBattle(state, divisionId, source = 'enemy-signal', certainty = 1) {
+  function scheduleBattle(state, divisionId, source = 'enemy-signal', certainty = 1, details = {}) {
     getDivisionById(state, divisionId);
     const preview = {
       divisionId,
       day: state.day + BATTLE_PREVIEW_LEAD_DAYS,
       source,
       certainty,
+      ...details,
     };
     state.battlePreview.push(preview);
     return preview;
+  }
+
+  function announceCampaignPressure(state) {
+    for (const scripted of CAMPAIGN_BATTLE_SCRIPT) {
+      if (scripted.announcedDay !== state.day) {
+        continue;
+      }
+      const division = getDivisionById(state, scripted.divisionId);
+      scheduleBattle(state, scripted.divisionId, 'campaign-script', 1, {
+        id: scripted.id,
+        day: scripted.day,
+        announcedDay: scripted.announcedDay,
+        requestedAmmo: scripted.requestedAmmo,
+      });
+      state.frontRequests.push({
+        id: scripted.id,
+        divisionId: scripted.divisionId,
+        announcedDay: scripted.announcedDay,
+        battleDay: scripted.day,
+        requestedAmmo: scripted.requestedAmmo,
+        deliveredAmmo: 0,
+        shipmentIds: [],
+      });
+      state.eventLog.push({
+        day: state.day,
+        type: 'front-request',
+        divisionId: division.id,
+        text: `${division.name}预告 D${scripted.day}将遭遇强攻，战前公开申请弹药 ${scripted.requestedAmmo.toFixed(1)} D。`,
+      });
+    }
   }
 
   function activateScheduledBattles(state) {
@@ -304,22 +362,6 @@
     return { ...outcome, ratio };
   }
 
-  function counterfactualForBattle(division, outcome) {
-    if (outcome.frontMovement > -3 && outcome.casualtyRate < 0.08) {
-      return null;
-    }
-    const suppliedDivision = { ...division, ammoDays: division.ammoDays + 2 };
-    const suppliedOutcome = battleOutcomeFor(computeEffectiveness(suppliedDivision));
-    if (suppliedOutcome.casualtyRate >= outcome.casualtyRate) {
-      return null;
-    }
-    return {
-      addedAmmoDays: 2,
-      casualtyRateReduction: outcome.casualtyRate - suppliedOutcome.casualtyRate,
-      text: `若多留 2 天弹药储备，${division.name}的预计损失会更小。`,
-    };
-  }
-
   function resolveBattles(state) {
     const results = [];
     for (const division of state.divisions) {
@@ -328,6 +370,12 @@
       }
       const effectiveness = computeEffectiveness(division);
       const outcome = battleOutcomeFor(effectiveness);
+      const before = {
+        frontPosition: division.frontPosition,
+        manpowerRatio: division.manpowerRatio,
+        equipmentReady: division.equipmentReady,
+        ammoDays: division.ammoDays,
+      };
       const casualties = division.manpowerRatio * PERSONNEL_FULL_STRENGTH * outcome.casualtyRate;
       const kia = casualties * 0.3;
       const wounded = casualties * 0.7;
@@ -337,10 +385,26 @@
         1,
       );
       division.frontMovement = outcome.frontMovement;
+      division.frontPosition += outcome.frontMovement;
+      division.casualtiesTotal += casualties;
+      division.equipmentReady = clamp(division.equipmentReady - outcome.equipmentLossRate, 0, 1);
       state.personnel.permanentLosses += kia;
       sendWoundedToHospital(state, wounded);
-      const counterfactual = counterfactualForBattle(division, outcome);
-      results.push({ divisionId: division.id, effectiveness, outcome, casualties, kia, wounded, counterfactual });
+      const preview = state.battlePreview.find((candidate) => (
+        candidate.divisionId === division.id && candidate.day === state.day
+      ));
+      const request = preview?.id
+        ? state.frontRequests.find((candidate) => candidate.id === preview.id)
+        : null;
+      const after = {
+        frontPosition: division.frontPosition,
+        manpowerRatio: division.manpowerRatio,
+        equipmentReady: division.equipmentReady,
+        ammoDays: division.ammoDays,
+      };
+      const result = { divisionId: division.id, effectiveness, outcome, casualties, kia, wounded, request, before, after };
+      division.battles.push({ day: state.day, ...result });
+      results.push(result);
     }
     return results;
   }
@@ -356,16 +420,20 @@
         day: state.day,
         type: 'battle-report',
         divisionId: division.id,
-        text: `${division.name}于交战日遭遇敌军，${exhausted ? '弹药于交战第 1 日耗尽；' : ''}${result.outcome.label}，${movement}，伤亡 ${result.casualties.toFixed(1)} 点。`,
+        text: `${division.name}于交战日遭遇敌军，${exhausted ? '弹药于交战第 1 日耗尽；' : ''}${result.outcome.label}，${movement}，累计战线 ${division.frontPosition >= 0 ? '+' : ''}${division.frontPosition} 公里，伤亡 ${result.casualties.toFixed(1)} 点，装备完好率降至 ${Math.round(division.equipmentReady * 100)}%。`,
         result,
       });
-      if (result.counterfactual) {
+      if (result.request) {
+        const shortfall = Math.max(0, result.request.requestedAmmo - result.request.deliveredAmmo);
+        const contextText = shortfall > 1e-6
+          ? `${division.name}战前公开申请弹药 ${result.request.requestedAmmo.toFixed(1)} D，请求窗口内实际到达 ${result.request.deliveredAmmo.toFixed(1)} D，差额 ${shortfall.toFixed(1)} D。战报仅记录请求满足情况，不判定调度对错。`
+          : `${division.name}战前公开申请弹药 ${result.request.requestedAmmo.toFixed(1)} D，请求窗口内实际到达 ${result.request.deliveredAmmo.toFixed(1)} D，请求已满足。`;
         state.eventLog.push({
           day: state.day,
-          type: 'counterfactual',
+          type: 'request-context',
           divisionId: division.id,
-          text: result.counterfactual.text,
-          result: result.counterfactual,
+          text: contextText,
+          result: result.request,
         });
       }
     }
@@ -513,9 +581,9 @@
     }
   }
 
-  // Converts the player's standing distribution rules into today's shipments.
-  // Lines are still dispatched as a batch: the player never selects a convoy.
-  function dispatchConfiguredShipments(state) {
+  // Pure preview of the batches that the standing orders would dispatch today.
+  // The UI uses this exact function so "today's plan" cannot drift from settlement.
+  function planConfiguredShipments(state) {
     const priorityOf = (division) => {
       const basePriority = Math.max(0, state.orders.divisionPriority[division.id] || 0);
       const reserve = Math.max(0, state.orders.minReserveDays[division.id] || 0);
@@ -559,6 +627,13 @@
         availableSupply -= cargo.supply;
       }
     }
+    return shipments;
+  }
+
+  // Converts the player's standing distribution rules into today's shipments.
+  // Lines are still dispatched as a batch: the player never selects a convoy.
+  function dispatchConfiguredShipments(state) {
+    const shipments = planConfiguredShipments(state);
     if (shipments.length > 0) {
       dispatchShipments(state, shipments);
       state.eventLog.push({ day: state.day, type: 'dispatch', count: shipments.length });
@@ -580,6 +655,16 @@
       division.ammoDays += shipment.cargo.ammo / dailyConsumption.ammo;
       division.supplyDays += shipment.cargo.supply / dailyConsumption.supply;
       state.personnel.pool += shipment.cargo.personnel;
+      for (const request of state.frontRequests) {
+        if (
+          request.divisionId === division.id
+          && state.day >= request.announcedDay
+          && state.day <= request.battleDay
+        ) {
+          request.deliveredAmmo += shipment.cargo.ammo;
+          request.shipmentIds.push(shipment.id);
+        }
+      }
     }
 
     state.transitQueue = remainingShipments;
@@ -637,13 +722,76 @@
     state.personnel.integrationQueue = remainingIntegration;
   }
 
+  function finishCampaign(state, code, label, reason) {
+    state.ended = true;
+    state.campaign.status = code === 'defeat' ? 'defeat' : 'completed';
+    state.campaign.result = { code, label };
+    state.campaign.reason = reason;
+    state.campaign.endedDay = state.day;
+    state.eventLog.push({
+      day: state.day,
+      type: 'campaign-end',
+      text: `战役结算：${label}。${reason}`,
+    });
+  }
+
+  function evaluateCampaign(state) {
+    if (state.ended) {
+      return state.campaign.result;
+    }
+    const collapsed = state.divisions.find((division) => (
+      division.collapsed || division.manpowerRatio <= DIVISION_COLLAPSE_MANPOWER_RATIO
+    ));
+    if (collapsed) {
+      collapsed.collapsed = true;
+      finishCampaign(state, 'defeat', '战役失败', `${collapsed.name}失去建制，战区无法继续组织防御。`);
+      return state.campaign.result;
+    }
+    const failedFronts = state.divisions.filter((division) => (
+      division.frontPosition <= CRITICAL_FRONT_POSITION
+    ));
+    const breakthrough = state.divisions.find((division) => (
+      division.frontPosition <= BREAKTHROUGH_FRONT_POSITION
+    ));
+    if (breakthrough) {
+      finishCampaign(state, 'defeat', '战役失败', `${breakthrough.name}防区被突破，战线累计后退 ${Math.abs(breakthrough.frontPosition)} 公里。`);
+      return state.campaign.result;
+    }
+    if (failedFronts.length >= FAILED_FRONTS_FOR_DEFEAT) {
+      finishCampaign(
+        state,
+        'defeat',
+        '战役失败',
+        `${failedFronts.map((division) => division.name).join('、')}退至关键防线之后。`,
+      );
+      return state.campaign.result;
+    }
+    if (state.day < GAME_LENGTH_DAYS) {
+      return null;
+    }
+    const costly = state.divisions.some((division) => division.frontPosition <= -8)
+      || state.personnel.permanentLosses >= 40;
+    if (costly) {
+      finishCampaign(state, 'costly-victory', '惨胜', '指定防区仍在我方控制，但阵地和人员损失过高。');
+    } else {
+      finishCampaign(state, 'victory', '胜利', '三个师均保持建制，且未有两条战线丢失关键防区。');
+    }
+    return state.campaign.result;
+  }
+
   // M3 adds local consumption after all arrivals have been received for the day.
-  function advanceDay(state, { dispatchConfigured = true } = {}) {
+  function advanceDay(state, { dispatchConfigured = true, campaignScript = true } = {}) {
+    if (state.ended) {
+      return;
+    }
     state.day += 1;
     settleQuota(state);
     settleMobilization(state);
     advanceQueues(state);
     assignPersonnel(state);
+    if (campaignScript) {
+      announceCampaignPressure(state);
+    }
     activateScheduledBattles(state);
     for (const division of state.divisions) {
       perceive(state, division);
@@ -656,15 +804,14 @@
       dispatchConfiguredShipments(state);
     }
     generateDailyReport(state, battleResults);
+    evaluateCampaign(state);
     refreshInfoSnapshot(state);
-    if (state.day >= GAME_LENGTH_DAYS) {
-      state.ended = true;
-    }
   }
 
   return {
     createInitialState,
     dispatchShipments,
+    planConfiguredShipments,
     dispatchConfiguredShipments,
     settleQuota,
     settleMobilization,
@@ -683,10 +830,12 @@
     assignPersonnel,
     integrationRuleFor,
     scheduleBattle,
+    announceCampaignPressure,
     activateScheduledBattles,
     battleOutcomeFor,
     resolveBattles,
     generateDailyReport,
+    evaluateCampaign,
     refreshInfoSnapshot,
   };
 }));
