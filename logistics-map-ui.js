@@ -7,8 +7,8 @@
 import './logistics-constants.js';
 import './logistics-core.js';
 
-const { createInitialState, advanceDay, ammoTierOf, computeEffectiveness, planConfiguredShipments } = window.LogisticsCore;
-const { MAP, TOTAL_TRANSPORT_PER_DAY } = window.LogisticsConstants;
+const { createInitialState, advanceDay, ammoTierOf, computeEffectiveness, planConfiguredShipments, availableTransport, occupiedFleet } = window.LogisticsCore;
+const { MAP, TOTAL_TRANSPORT_PER_DAY, PERSONNEL_PER_D } = window.LogisticsConstants;
 
 const state = createInitialState();
 const app = document.querySelector('#app');
@@ -84,13 +84,18 @@ function sumQueue(queue, valueOf) {
 function renderFlowOverview() {
   const plannedShipments = planConfiguredShipments(state);
   const plannedByLine = Object.fromEntries(plannedShipments.map((shipment) => [shipment.lineId, shipment]));
-  const plannedTotal = sumQueue(plannedShipments, (shipment) => (shipment.cargo.ammo || 0) + (shipment.cargo.supply || 0));
+  const plannedTotal = sumQueue(plannedShipments, (shipment) => shipment.fleetSize || (shipment.cargo.ammo || 0) + (shipment.cargo.supply || 0) + (shipment.cargo.personnel || 0));
   const baseTotal = state.base.ammo + state.base.supply;
-  const sendableUpperBound = Math.min(TOTAL_TRANSPORT_PER_DAY, state.orders.dailyShipmentCap, baseTotal);
-  const transitAmmo = sumQueue(state.transitQueue, (item) => item.cargo.ammo || 0);
-  const transitSupply = sumQueue(state.transitQueue, (item) => item.cargo.supply || 0);
-  const nextMaterialArrival = state.transitQueue.length > 0
-    ? Math.min(...state.transitQueue.map((item) => item.arrivesDay))
+  const dispatchable = availableTransport(state);
+  const occupied = occupiedFleet(state);
+  const sendableUpperBound = Math.min(dispatchable, state.orders.dailyShipmentCap);
+  const outbound = state.transitQueue.filter((item) => item.leg !== 'return');
+  const inbound = state.transitQueue.filter((item) => item.leg === 'return');
+  const transitAmmo = sumQueue(outbound, (item) => item.cargo.ammo || 0);
+  const transitSupply = sumQueue(outbound, (item) => item.cargo.supply || 0);
+  const transitPersonnel = sumQueue(outbound, (item) => (item.cargo.personnel || 0) * PERSONNEL_PER_D);
+  const nextMaterialArrival = outbound.length > 0
+    ? Math.min(...outbound.map((item) => item.arrivesDay))
     : null;
   const visibleDivisions = state.divisions.map((division) => ({
     id: division.id,
@@ -105,24 +110,29 @@ function renderFlowOverview() {
   const training = sumQueue(state.personnel.trainingQueue, (item) => item.count || 0);
   const hospital = sumQueue(state.personnel.hospitalQueue, (item) => item.count || 0);
   const integrating = sumQueue(state.personnel.integrationQueue, (item) => item.count || 0);
+  const evacWounded = sumQueue(state.divisions, (division) => sumQueue(division.evacQueue || [], (batch) => (batch.kind === 'wounded' ? batch.count : 0)));
+  const evacRotation = sumQueue(state.divisions, (division) => sumQueue(division.evacQueue || [], (batch) => (batch.kind === 'rotation' ? batch.count : 0)));
+  const returningPeople = sumQueue(inbound, (item) => (item.cargo.wounded || 0) + (item.cargo.rotation || 0));
   const nextPersonnelDay = [
     ...state.personnel.trainingQueue.map((item) => item.arrivesDay),
     ...state.personnel.hospitalQueue.map((item) => item.arrivesDay),
     ...state.personnel.integrationQueue.map((item) => item.arrivesDay),
+    ...inbound.map((item) => item.arrivesDay),
   ].sort((a, b) => a - b)[0];
   const materialEta = nextMaterialArrival === null ? '尚无车队' : `最近 D${nextMaterialArrival} 抵达`;
   const personnelEta = nextPersonnelDay === undefined
     ? `下批动员 D${state.personnel.mobilization.nextArrivalDay}`
     : `最近 D${nextPersonnelDay} 转出`;
+  const capValue = state.orders.dailyShipmentCap === Infinity ? dispatchable : Math.min(state.orders.dailyShipmentCap, dispatchable);
 
   if (!dispatchPanelOpen) {
     return `
       <section class="dispatch-summary-bar" aria-label="发运摘要">
         <div><span>可用库存</span><b>${num(baseTotal)} D</b><small>弹 ${num(state.base.ammo)} · 给 ${num(state.base.supply)}</small></div>
-        <div><span>本日发运</span><b>${num(plannedTotal)} D</b><small>上限 ${num(sendableUpperBound)} D</small></div>
-        <div><span>在途</span><b>${state.transitQueue.length} 批</b><small>${materialEta}</small></div>
+        <div><span>可调度车队</span><b>${num(dispatchable)} D</b><small>占用 ${num(occupied)} D · 本日派 ${num(plannedTotal)} D</small></div>
+        <div><span>在途</span><b>${state.transitQueue.length} 批</b><small>${outbound.length} 去程 / ${inbound.length} 回程</small></div>
         <div><span>前线缺口</span><b>弹 ${num(ammoGap)} · 给 ${num(supplyGap)}</b><small>相对最低储备线</small></div>
-        <button type="button" data-toggle-dispatch>打开发运单</button>
+        <button type="button" data-toggle-dispatch>打开派车</button>
       </section>
     `;
   }
@@ -130,45 +140,52 @@ function renderFlowOverview() {
   return `
     <section class="flow-overview" aria-label="后勤流动总览">
       <div class="flow-title">
-        <div><strong>今日发运单</strong><span>不用填参数：看今天会装什么，直接增减各前线的发运份额</span></div>
-        <button type="button" data-toggle-dispatch>收起发运单</button>
+        <div><strong>可调度车队</strong><span>增减的是派往各方向的车；回程按规则自动装载，不用审批</span></div>
+        <button type="button" data-toggle-dispatch>收起派车</button>
       </div>
       <div class="command-summary">
         <div class="question-card">
           <span class="question-label">可用库存</span>
           <span class="question-value">共 ${num(baseTotal)} D</span>
-          <span class="question-detail">弹药 <strong>${num(state.base.ammo)} D</strong>　给养 <strong>${num(state.base.supply)} D</strong>　· 下批 D${state.quota.nextArrivalDay}</span>
+          <span class="question-detail">弹药 <strong>${num(state.base.ammo)} D</strong>　给养 <strong>${num(state.base.supply)} D</strong>　人员池 <strong>${num(state.personnel.pool, 0)}</strong>　· 下批 D${state.quota.nextArrivalDay}</span>
         </div>
         <div class="question-card">
-          <span class="question-label">今日发运上限</span>
-          <span class="question-value">${num(sendableUpperBound)} D</span>
-          <label class="cap-control">本日使用运力
-            <input aria-label="今日发运上限" type="range" min="0" max="1" step="0.1" value="${state.orders.dailyShipmentCap === Infinity ? 1 : state.orders.dailyShipmentCap}" data-global="dailyShipmentCap">
+          <span class="question-label">可调度车队</span>
+          <span class="question-value">${num(dispatchable)} D</span>
+          <label class="cap-control">本日派车上限
+            <input aria-label="今日派车上限" type="range" min="0" max="${Math.max(dispatchable, 0.01)}" step="0.1" value="${capValue}" data-global="dailyShipmentCap">
           </label>
+          <span class="question-detail">在途占用 ${num(occupied)} D / 编制 ${num(TOTAL_TRANSPORT_PER_DAY)} D</span>
         </div>
         <div class="question-card plan">
           <span class="question-label">本日实际装载</span>
           <span class="question-value">${num(plannedTotal)} D</span>
-          <span class="question-detail">${plannedTotal + 1e-6 < sendableUpperBound ? '<strong>尚有可用运力，可增加前线份额</strong>' : '已用满当日可发运量'}</span>
+          <span class="question-detail">${plannedTotal + 1e-6 < sendableUpperBound ? '<strong>尚有可调度车辆，可增加派车</strong>' : '已用满当日可派车辆'}</span>
         </div>
       </div>
-      <div class="dispatch-table" aria-label="今日预计发运去向">
-        <div class="dispatch-head"><span>发给谁</span><span>前线现状（最新报告）</span><span>今天装载</span><span>预计抵达</span><span>增减份额</span></div>
+      <div class="dispatch-table" aria-label="今日预计派车去向">
+        <div class="dispatch-head"><span>派往谁</span><span>前线现状（最新报告）</span><span>今天装载</span><span>回程预计</span><span>车辆归来</span><span>派车</span></div>
         ${MAP.lines.map((line) => {
           const division = state.divisions.find((item) => item.id === line.divisionId);
           const visible = division.lastReportSnapshot || division;
           const shipment = plannedByLine[line.id];
-          const amount = shipment ? (shipment.cargo.ammo || 0) + (shipment.cargo.supply || 0) : 0;
+          const amount = shipment ? shipment.fleetSize : 0;
+          const cargo = shipment?.cargo || {};
+          const expected = shipment?.expectedReturn || { wounded: 0, rotation: 0 };
+          const returnText = amount > 0
+            ? `伤 ${num(expected.wounded, 0)} / 轮 ${num(expected.rotation, 0)}`
+            : '不派车';
           return `
             <div class="dispatch-row">
               <span class="dispatch-target"><b>${esc(division.name)}</b><small>${line.type === 'rail' ? '铁路' : '公路'} · ${line.transitDays} 天</small></span>
-              <span data-mobile-label="前线现状">弹 ${num(visible.ammoDays)}天　给 ${num(visible.supplyDays)}天</span>
-              <span data-mobile-label="今天装载" class="dispatch-cargo ${amount <= 0 ? 'dispatch-empty' : ''}"><b class="dispatch-amount">${num(amount)} D</b><small>　弹 ${num(shipment?.cargo.ammo || 0)} / 给 ${num(shipment?.cargo.supply || 0)}</small></span>
-              <span data-mobile-label="预计抵达">${amount > 0 ? `D${state.day + 1 + line.transitDays}` : '不发运'}</span>
-              <span class="share-stepper" data-mobile-label="增减份额">
-                <button type="button" aria-label="减少${esc(division.name)}发运份额" data-priority-step="-1" data-division="${division.id}" ${state.orders.divisionPriority[division.id] <= 0 ? 'disabled' : ''}>−</button>
-                <b title="发运权重">${state.orders.divisionPriority[division.id]}</b>
-                <button type="button" aria-label="增加${esc(division.name)}发运份额" data-priority-step="1" data-division="${division.id}">+</button>
+              <span data-mobile-label="前线现状">弹 ${num(visible.ammoDays)}天　给 ${num(visible.supplyDays)}天　待后送 ${num((visible.evacWounded || 0), 0)}</span>
+              <span data-mobile-label="今天装载" class="dispatch-cargo ${amount <= 0 ? 'dispatch-empty' : ''}"><b class="dispatch-amount">${num(amount)} D</b><small>　弹 ${num(cargo.ammo || 0)} / 给 ${num(cargo.supply || 0)} / 员 ${num(cargo.personnel || 0)}</small></span>
+              <span data-mobile-label="回程预计">${returnText}</span>
+              <span data-mobile-label="车辆归来">${amount > 0 ? `去 D${state.day + 1 + line.transitDays} · 归 D${state.day + 1 + line.transitDays * 2}` : '—'}</span>
+              <span class="share-stepper" data-mobile-label="派车">
+                <button type="button" aria-label="减少${esc(division.name)}派车" data-priority-step="-1" data-division="${division.id}" ${state.orders.divisionPriority[division.id] <= 0 ? 'disabled' : ''}>−</button>
+                <b title="派车权重">${state.orders.divisionPriority[division.id]}</b>
+                <button type="button" aria-label="增加${esc(division.name)}派车" data-priority-step="1" data-division="${division.id}">+</button>
               </span>
             </div>
           `;
@@ -183,8 +200,8 @@ function renderFlowOverview() {
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div class="flow-card flow-card-focus">
           <span class="flow-kicker">在途物资</span>
-          <b>弹 ${num(transitAmmo)}D · 给 ${num(transitSupply)}D</b>
-          <small>${materialEta} · ${state.transitQueue.length} 支车队</small>
+          <b>弹 ${num(transitAmmo)}D · 给 ${num(transitSupply)}D · 员 ${num(transitPersonnel, 0)}</b>
+          <small>${materialEta} · ${outbound.length} 支去程</small>
         </div>
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div class="flow-card">
@@ -195,14 +212,16 @@ function renderFlowOverview() {
       </div>
       <div class="personnel-lane">
         <span class="flow-kicker">人员流转</span>
-        <span>训练中 <b>${num(training, 0)}</b></span>
+        <span>待后送 <b>${num(evacWounded, 0)}</b><small>伤</small> / <b>${num(evacRotation, 0)}</b><small>轮</small></span>
+        <span class="personnel-arrow">→</span>
+        <span>回程在途 <b>${num(returningPeople, 0)}</b></span>
+        <span class="personnel-arrow">→</span>
+        <span>医院 <b>${num(hospital, 0)}</b></span>
         <span class="personnel-arrow">→</span>
         <span>人员池 <b>${num(state.personnel.pool, 0)}</b></span>
         <span class="personnel-arrow">→</span>
-        <span>整编中 <b>${num(integrating, 0)}</b></span>
-        <span class="personnel-separator"></span>
-        <span>医院 <b>${num(hospital, 0)}</b></span>
-        <small>${personnelEta}；人员不占物资车队运力</small>
+        <span>去程补员 / 整编 <b>${num(integrating, 0)}</b></span>
+        <small>${personnelEta}；训练中 ${num(training, 0)}</small>
       </div>
     </section>
   `;
@@ -210,8 +229,10 @@ function renderFlowOverview() {
 
 function renderTransitBoard() {
   const shipments = [...state.transitQueue].sort((a, b) => a.arrivesDay - b.arrivesDay || a.id.localeCompare(b.id));
-  const transitAmmo = sumQueue(shipments, (item) => item.cargo.ammo || 0);
-  const transitSupply = sumQueue(shipments, (item) => item.cargo.supply || 0);
+  const outbound = shipments.filter((item) => item.leg !== 'return');
+  const inbound = shipments.filter((item) => item.leg === 'return');
+  const transitAmmo = sumQueue(outbound, (item) => item.cargo.ammo || 0);
+  const transitSupply = sumQueue(outbound, (item) => item.cargo.supply || 0);
   const rows = shipments.map((shipment) => {
     const division = state.divisions.find((item) => item.id === shipment.divisionId);
     const line = MAP.lines.find((item) => item.id === shipment.lineId);
@@ -219,24 +240,34 @@ function renderTransitBoard() {
     const elapsed = clamp(state.day - shipment.dispatchedDay, 0, span);
     const progress = elapsed / span;
     const remaining = Math.max(0, shipment.arrivesDay - state.day);
+    const isReturn = shipment.leg === 'return';
+    const cargoText = isReturn
+      ? `回程 伤 ${num(shipment.cargo.wounded || 0, 0)}　轮 ${num(shipment.cargo.rotation || 0, 0)}`
+      : `去程 弹 ${num(shipment.cargo.ammo)} D　给 ${num(shipment.cargo.supply)} D　员 ${num((shipment.cargo.personnel || 0) * PERSONNEL_PER_D, 0)}`;
     return `
       <div class="transit-row">
-        <span class="transit-target"><b>${esc(division?.name || shipment.divisionId)}</b><small>${line?.type === 'rail' ? '铁路' : '公路'} · ${esc(shipment.id)}</small></span>
-        <span class="transit-cargo">弹 ${num(shipment.cargo.ammo)} D　给 ${num(shipment.cargo.supply)} D</span>
+        <span class="transit-target"><b>${esc(division?.name || shipment.divisionId)}</b><small>${isReturn ? '回程' : '去程'} · ${line?.type === 'rail' ? '铁路' : '公路'} · ${esc(shipment.id)}</small></span>
+        <span class="transit-cargo">${cargoText}</span>
         <span class="transit-progress"><i><em style="width:${Math.round(progress * 100)}%"></em></i><small>${Math.round(progress * 100)}% · 还有 ${remaining} 天</small></span>
-        <b class="transit-eta">D${shipment.arrivesDay} 抵达</b>
+        <b class="transit-eta">D${shipment.arrivesDay} ${isReturn ? '归营' : '抵达'}</b>
       </div>
     `;
   }).join('');
   return `
     <section class="transit-board" aria-label="全部在途运输">
       <header>
-        <div><strong>全部在途运输</strong><span>${shipments.length} 批 · 弹 ${num(transitAmmo)} D · 给 ${num(transitSupply)} D</span></div>
-        <small>${shipments.length > 0 ? '按预计抵达时间排序' : '发车后会在这里逐批跟踪'}</small>
+        <div><strong>全部在途运输</strong><span>${shipments.length} 批 · ${outbound.length} 去程 / ${inbound.length} 回程 · 弹 ${num(transitAmmo)} D · 给 ${num(transitSupply)} D</span></div>
+        <small>${shipments.length > 0 ? '按预计抵达时间排序；回程按规则自动装载' : '派车后会在这里逐批跟踪去程与回程'}</small>
       </header>
-      <div class="transit-list">${rows || '<p class="transit-empty">目前没有在途物资。</p>'}</div>
+      <div class="transit-list">${rows || '<p class="transit-empty">目前没有在途车辆。</p>'}</div>
     </section>
   `;
+}
+
+function evacCountUi(division, kind) {
+  return (division.evacQueue || []).reduce((sum, batch) => (
+    batch.kind === kind ? sum + batch.count : sum
+  ), 0);
 }
 
 function effectivenessBreakdown(division) {
@@ -358,18 +389,24 @@ function renderConvoys() {
     const line = MAP.lines.find((l) => l.id === shipment.lineId);
     if (!line) return '';
     const points = LINE_PATH_NODES[line.id].map((id) => NODE_POS[id]);
+    const path = shipment.leg === 'return' ? [...points].reverse() : points;
     const span = Math.max(1, shipment.arrivesDay - shipment.dispatchedDay);
     const t = clamp((state.day - shipment.dispatchedDay) / span, 0, 1);
-    const pos = pointAlongPath(points, t);
-    const badgePos = pointAlongPath(points, 0.56);
-    const title = `${line.id} → ${shipment.divisionId} · 弹药${num(shipment.cargo.ammo)}/给养${num(shipment.cargo.supply)} · 预计 D${shipment.arrivesDay} 抵达`;
+    const pos = pointAlongPath(path, t);
+    const badgePos = pointAlongPath(path, 0.56);
+    const title = shipment.leg === 'return'
+      ? `${line.id} 回程 · 伤${num(shipment.cargo.wounded || 0, 0)}/轮${num(shipment.cargo.rotation || 0, 0)} · 预计 D${shipment.arrivesDay} 归营`
+      : `${line.id} → ${shipment.divisionId} · 弹药${num(shipment.cargo.ammo)}/给养${num(shipment.cargo.supply)} · 预计 D${shipment.arrivesDay} 抵达`;
     const badgeWidth = 174;
+    const badgeText = shipment.leg === 'return'
+      ? `回程：伤 ${num(shipment.cargo.wounded || 0, 0)} · 轮 ${num(shipment.cargo.rotation || 0, 0)} · D${shipment.arrivesDay}归`
+      : `去程：弹 ${num(shipment.cargo.ammo)}D · 给 ${num(shipment.cargo.supply)}D · D${shipment.arrivesDay}到`;
     return `
       <g class="convoy-group">
         <circle class="convoy" cx="${pos.x}" cy="${pos.y}" r="5"><title>${esc(title)}</title></circle>
         <g class="convoy-badge" transform="translate(${badgePos.x - badgeWidth / 2}, ${badgePos.y + 11})">
           <rect width="${badgeWidth}" height="22" rx="5"></rect>
-          <text x="${badgeWidth / 2}" y="15" text-anchor="middle">在途：弹 ${num(shipment.cargo.ammo)}D · 给 ${num(shipment.cargo.supply)}D · D${shipment.arrivesDay}到</text>
+          <text x="${badgeWidth / 2}" y="15" text-anchor="middle">${esc(badgeText)}</text>
         </g>
       </g>
     `;
@@ -424,8 +461,8 @@ function renderLinePopover(lineId) {
   const line = MAP.lines.find((l) => l.id === lineId);
   const ratio = state.orders.lineRatios[lineId];
   const field = (key, label) => `
-    <label>${label} <b style="float:right" data-ratio-label="${key}">${Math.round(ratio[key] * 100)}%</b></label>
-    <input type="range" min="0" max="1" step="0.01" value="${ratio[key]}" data-ratio-input="${key}">
+    <label>${label} <b style="float:right" data-ratio-label="${key}">${Math.round((ratio[key] || 0) * 100)}%</b></label>
+    <input type="range" min="0" max="1" step="0.01" value="${ratio[key] || 0}" data-ratio-input="${key}">
   `;
   return `
     <div id="popover" data-kind="line">
@@ -433,7 +470,8 @@ function renderLinePopover(lineId) {
       <p class="pop-sub">吞吐 ${line.throughputPerDay}/日 · 在途 ${line.transitDays} 天 · 脆弱度 ${esc(line.fragility)}</p>
       ${field('ammo', '本日待发：弹药占装载量')}
       ${field('supply', '本日待发：给养占装载量')}
-      <p class="pop-sub" style="margin-top:8px">两项恒为 100%，只决定这条线下一批发车的货物构成；不改变该线的发运份额、配额，也绝不改动已经在途的批次。人员通过训练、人员池和整编单独流转，不占物资车队运力。</p>
+      ${field('personnel', '本日待发：补员占装载量')}
+      <p class="pop-sub" style="margin-top:8px">三项合计 100%，只决定这条线下一批发车的去程构成；不改变该线的派车量、配额，也绝不改动已经在途的批次。回程按规则自动装伤员或轮换，不在这里审批。</p>
     </div>
   `;
 }
@@ -457,12 +495,17 @@ function renderDivisionPopover(divisionId) {
         <div><span>疲劳 ${num(breakdown.fatigue * 100, 0)}%</span><b>抗疲劳 × ${num(breakdown.fatigueFactor, 2)}</b></div>
         <div><span>整编系数</span><b>× ${num(breakdown.integrationFactor, 2)}</b></div>
       </section>
-      <label>补给优先级</label>
+      <label>派车权重</label>
       <input type="number" min="0" step="1" value="${state.orders.divisionPriority[divisionId]}" data-order="priority" data-division="${divisionId}">
       <label>最低储备线（天）</label>
       <input type="number" min="0" step="1" value="${state.orders.minReserveDays[divisionId]}" data-order="reserve" data-division="${divisionId}">
-      <label>本轮分配人员（池中还剩 ${num(state.personnel.pool, 0)} 点）</label>
-      <input type="number" min="0" max="${Math.max(0, Math.floor(state.personnel.pool))}" step="1" value="${state.orders.personnelAssignment[divisionId] || 0}" data-order="personnel" data-division="${divisionId}">
+      <label>去程补员上限（空=按配比装满；0=不装人。池中 ${num(state.personnel.pool, 0)} 点）</label>
+      <input type="number" min="0" max="${Math.max(0, Math.floor(state.personnel.pool))}" step="1" value="${state.orders.personnelAssignment[divisionId] ?? ''}" placeholder="按配比" data-order="personnel" data-division="${divisionId}">
+      <label>下令轮换（点，上车前仍作战）</label>
+      <input type="number" min="0" step="1" value="${state.orders.rotationOrder[divisionId] || 0}" data-order="rotation" data-division="${divisionId}">
+      <label>取消待轮换</label>
+      <input type="number" min="0" step="1" value="${(state.orders.cancelRotation || {})[divisionId] || 0}" data-order="cancelRotation" data-division="${divisionId}">
+      <p class="pop-sub">待后送 伤 ${num(evacCountUi(division, 'wounded'), 0)} / 轮 ${num(evacCountUi(division, 'rotation'), 0)}。回程按规则自动装载，不用确认。</p>
       <div class="checkline">
         <input type="checkbox" id="truth-${divisionId}" ${state.orders.briefTruth[divisionId] ? 'checked' : ''} data-order="truth" data-division="${divisionId}">
         <label for="truth-${divisionId}" style="margin:0">回电告知真相（降低他的误判偏差）</label>
@@ -524,7 +567,7 @@ function render() {
         <h1>后勤指挥 · 战区态势图（交互原型）</h1>
         <div class="sub">第 ${state.day} / 30 天${state.ended ? ` · ${esc(state.campaign.result?.label || '战役结束')}` : ''}</div>
       </div>
-      <button id="advance" ${state.ended ? 'disabled' : ''}>${state.ended ? (state.campaign.result?.label || '战役结束') : `执行发运单 · 进入 D${state.day + 1} →`}</button>
+      <button id="advance" ${state.ended ? 'disabled' : ''}>${state.ended ? (state.campaign.result?.label || '战役结束') : `按规则派车 · 进入 D${state.day + 1} →`}</button>
     </div>
     <div class="note"><b>这是一份交互语言实验</b>：数值规则与 logistics-core.js 完全一致，改的只是操作方式——点线调配比，点师调指令，不再是整页表格。</div>
     ${renderCampaignResult()}
@@ -554,6 +597,12 @@ function render() {
               <option value="urgent" ${state.orders.trainingTrack === 'urgent' ? 'selected' : ''}>紧急 0 天</option>
             </select>
           </div>
+          <div class="hq-row"><span>回程优先</span>
+            <select data-global="returnPriority">
+              <option value="wounded" ${(state.orders.returnPriority?.wounded || 0) >= (state.orders.returnPriority?.rotation || 0) ? 'selected' : ''}>伤员优先</option>
+              <option value="rotation" ${(state.orders.returnPriority?.rotation || 0) > (state.orders.returnPriority?.wounded || 0) ? 'selected' : ''}>轮换优先</option>
+            </select>
+          </div>
           <div class="hq-row"><span>预支下期配额 D</span>
             <input type="number" min="0" max="3" step="0.1" value="0" data-global="advanceQuota">
           </div>
@@ -581,10 +630,10 @@ function render() {
 function updateRatio(lineId, field, rawValue) {
   const ratio = state.orders.lineRatios[lineId];
   const value = clamp(Number(rawValue) || 0, 0, 1);
-  const fields = ['ammo', 'supply'];
+  const fields = ['ammo', 'supply', 'personnel'];
   const others = fields.filter((key) => key !== field);
   const remaining = 1 - value;
-  const othersSum = others.reduce((sum, key) => sum + ratio[key], 0);
+  const othersSum = others.reduce((sum, key) => sum + (ratio[key] || 0), 0);
   if (othersSum <= 1e-6) {
     others.forEach((key) => { ratio[key] = remaining / others.length; });
   } else {
@@ -643,7 +692,18 @@ function bindEvents() {
       const field = input.dataset.order;
       if (field === 'priority') state.orders.divisionPriority[divisionId] = Math.max(0, Number(input.value) || 0);
       if (field === 'reserve') state.orders.minReserveDays[divisionId] = Math.max(0, Number(input.value) || 0);
-      if (field === 'personnel') state.orders.personnelAssignment[divisionId] = Math.max(0, Number(input.value) || 0);
+      if (field === 'personnel') {
+        if (input.value === '') {
+          delete state.orders.personnelAssignment[divisionId];
+        } else {
+          state.orders.personnelAssignment[divisionId] = Math.max(0, Number(input.value) || 0);
+        }
+      }
+      if (field === 'rotation') state.orders.rotationOrder[divisionId] = Math.max(0, Number(input.value) || 0);
+      if (field === 'cancelRotation') {
+        if (!state.orders.cancelRotation) state.orders.cancelRotation = {};
+        state.orders.cancelRotation[divisionId] = Math.max(0, Number(input.value) || 0);
+      }
       if (field === 'truth') state.orders.briefTruth[divisionId] = input.checked;
     });
   });
@@ -663,6 +723,11 @@ function bindEvents() {
     input.addEventListener('change', () => {
       const key = input.dataset.global;
       if (key === 'trainingTrack') state.orders.trainingTrack = input.value;
+      if (key === 'returnPriority') {
+        state.orders.returnPriority = input.value === 'rotation'
+          ? { wounded: 0, rotation: 1 }
+          : { wounded: 1, rotation: 0 };
+      }
       if (key === 'dailyShipmentCap') {
         state.orders.dailyShipmentCap = Math.max(0, Number(input.value) || 0);
         render();

@@ -37,6 +37,10 @@
   const MOBILIZATION_INTERVAL_DAYS = 21;
   const MOBILIZATION_BATCH_SIZE = 30;
   const PERSONNEL_FULL_STRENGTH = 100;
+  // 10 personnel points = 0.1 D of outbound cargo. See tech plan §11.11.
+  const PERSONNEL_PER_D = 100;
+  const EVAC_WINDOW_EXTRA_DAYS = 2;
+  const ROTATION_REST_DAYS = 3;
   const TRAINING_DAYS = { urgent: 0, normal: 7 };
   const TRAINING_COMBAT_MULT = { urgent: 0.5, normal: 1.0 };
   const TRAINING_CASUALTY_MULT = { urgent: 1.3, normal: 1.0 };
@@ -131,6 +135,9 @@
     MOBILIZATION_INTERVAL_DAYS,
     MOBILIZATION_BATCH_SIZE,
     PERSONNEL_FULL_STRENGTH,
+    PERSONNEL_PER_D,
+    EVAC_WINDOW_EXTRA_DAYS,
+    ROTATION_REST_DAYS,
     TRAINING_DAYS,
     TRAINING_COMBAT_MULT,
     TRAINING_CASUALTY_MULT,

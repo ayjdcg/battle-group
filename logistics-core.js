@@ -24,7 +24,11 @@
     MOBILIZATION_INTERVAL_DAYS,
     MOBILIZATION_BATCH_SIZE,
     PERSONNEL_FULL_STRENGTH,
+    PERSONNEL_PER_D,
+    EVAC_WINDOW_EXTRA_DAYS,
+    ROTATION_REST_DAYS,
     TRAINING_DAYS,
+    CASUALTY_SPLIT,
     MEDIC_RECOVERY_RATE,
     HOSPITAL_DAILY_QUOTA,
     HOSPITAL_OVERFLOW_DEATH_MULT,
@@ -75,6 +79,7 @@
       lastReportSnapshot: null,
       reportHistory: [],
       perceivedSelf: null,
+      evacQueue: [],
     };
   }
 
@@ -108,16 +113,18 @@
         createDivision(MAP.divisions[2], DIVISION_PERSONALITY_PRESETS.obedient),
       ],
       orders: {
-        // 线路只运输物资；人员走动员、训练、人员池、建制消化的独立管线。
         lineRatios: {
-          'line-rail': { ammo: 2 / 3, supply: 1 / 3 },
-          'line-road-1': { ammo: 2 / 3, supply: 1 / 3 },
-          'line-road-2': { ammo: 2 / 3, supply: 1 / 3 },
+          'line-rail': { ammo: 0.6, supply: 0.3, personnel: 0.1 },
+          'line-road-1': { ammo: 0.6, supply: 0.3, personnel: 0.1 },
+          'line-road-2': { ammo: 0.6, supply: 0.3, personnel: 0.1 },
         },
         divisionPriority: { 'div-1': 1, 'div-2': 1, 'div-3': 1 },
         minReserveDays: { 'div-1': 3, 'div-2': 3, 'div-3': 3 },
         trainingTrack: 'normal',
         personnelAssignment: {},
+        returnPriority: { wounded: 1, rotation: 0 },
+        rotationOrder: { 'div-1': 0, 'div-2': 0, 'div-3': 0 },
+        cancelRotation: { 'div-1': 0, 'div-2': 0, 'div-3': 0 },
         briefTruth: {},
         dailyShipmentCap: Infinity,
         advanceQuota: 0,
@@ -152,6 +159,8 @@
       casualtiesTotal: division.casualtiesTotal,
       collapsed: division.collapsed,
       lowAmmoDays: division.lowAmmoDays,
+      evacWounded: evacCount(division, 'wounded'),
+      evacRotation: evacCount(division, 'rotation'),
     };
   }
 
@@ -190,6 +199,159 @@
 
   function cargoTotal(cargo) {
     return (cargo.ammo || 0) + (cargo.supply || 0) + (cargo.personnel || 0);
+  }
+
+  function evacCount(division, kind) {
+    return (division.evacQueue || []).reduce((sum, batch) => (
+      batch.kind === kind ? sum + batch.count : sum
+    ), 0);
+  }
+
+  function personnelPointsToD(points) {
+    return points / PERSONNEL_PER_D;
+  }
+
+  function personnelDToPoints(amount) {
+    return amount * PERSONNEL_PER_D;
+  }
+
+  function lineOutboundToday(state, lineId) {
+    return state.transitQueue.reduce((sum, shipment) => (
+      shipment.lineId === lineId && shipment.leg !== 'return' && shipment.dispatchedDay === state.day
+        ? sum + (shipment.fleetSize || cargoTotal(shipment.cargo))
+        : sum
+    ), 0);
+  }
+
+  function occupiedFleet(state) {
+    return state.transitQueue.reduce((sum, shipment) => (
+      sum + (shipment.fleetSize || cargoTotal(shipment.cargo))
+    ), 0);
+  }
+
+  function availableTransport(state) {
+    return Math.max(0, TOTAL_TRANSPORT_PER_DAY - occupiedFleet(state));
+  }
+
+  function lineForDivision(divisionId) {
+    return MAP.lines.find((line) => line.divisionId === divisionId);
+  }
+
+  function evacWindowDays(divisionId) {
+    const line = lineForDivision(divisionId);
+    return (line ? line.transitDays : 1) + EVAC_WINDOW_EXTRA_DAYS;
+  }
+
+  function returnKindOrder(state) {
+    const priority = state.orders.returnPriority || { wounded: 1, rotation: 0 };
+    return (priority.wounded || 0) >= (priority.rotation || 0)
+      ? ['wounded', 'rotation']
+      : ['rotation', 'wounded'];
+  }
+
+  function takeFromEvacQueue(division, kind, maxPoints) {
+    if (maxPoints <= 0) {
+      return 0;
+    }
+    let taken = 0;
+    const remaining = [];
+    for (const batch of division.evacQueue || []) {
+      if (batch.kind !== kind || taken >= maxPoints) {
+        remaining.push(batch);
+        continue;
+      }
+      const take = Math.min(batch.count, maxPoints - taken);
+      taken += take;
+      if (batch.count > take) {
+        remaining.push({ ...batch, count: batch.count - take });
+      }
+    }
+    division.evacQueue = remaining;
+    return taken;
+  }
+
+  function previewReturnLoad(state, division, fleetSize) {
+    const remaining = { wounded: evacCount(division, 'wounded'), rotation: evacCount(division, 'rotation') };
+    const loaded = { wounded: 0, rotation: 0 };
+    let capacity = personnelDToPoints(fleetSize);
+    for (const kind of returnKindOrder(state)) {
+      const take = Math.min(remaining[kind], capacity);
+      loaded[kind] = take;
+      remaining[kind] -= take;
+      capacity -= take;
+    }
+    return loaded;
+  }
+
+  function loadReturnCargo(state, division, fleetSize) {
+    const loaded = { wounded: 0, rotation: 0 };
+    let capacity = personnelDToPoints(fleetSize);
+    for (const kind of returnKindOrder(state)) {
+      const take = takeFromEvacQueue(division, kind, capacity);
+      loaded[kind] = take;
+      capacity -= take;
+      if (kind === 'rotation' && take > 0) {
+        division.manpowerRatio = clamp(
+          division.manpowerRatio - take / PERSONNEL_FULL_STRENGTH,
+          0,
+          1,
+        );
+      }
+    }
+    return loaded;
+  }
+
+  function enqueueEvac(division, kind, count, day) {
+    if (count > 0) {
+      division.evacQueue.push({
+        id: `evac-${kind}-${day}-${division.evacQueue.length + 1}`,
+        count,
+        kind,
+        sinceDay: day,
+      });
+    }
+  }
+
+  function applyRotationOrders(state) {
+    for (const division of state.divisions) {
+      const cancel = Math.max(0, (state.orders.cancelRotation || {})[division.id] || 0);
+      if (cancel > 0) {
+        takeFromEvacQueue(division, 'rotation', cancel);
+      }
+      const requested = Math.max(0, state.orders.rotationOrder[division.id] || 0);
+      if (requested > 0) {
+        const current = evacCount(division, 'rotation');
+        const fightingPoints = division.manpowerRatio * PERSONNEL_FULL_STRENGTH - current;
+        enqueueEvac(division, 'rotation', Math.min(requested, Math.max(0, fightingPoints)), state.day);
+      }
+      state.orders.rotationOrder[division.id] = 0;
+      if (!state.orders.cancelRotation) {
+        state.orders.cancelRotation = {};
+      }
+      state.orders.cancelRotation[division.id] = 0;
+    }
+  }
+
+  function expireEvacQueues(state) {
+    for (const division of state.divisions) {
+      const windowDays = evacWindowDays(division.id);
+      const remaining = [];
+      for (const batch of division.evacQueue) {
+        if (batch.kind === 'wounded' && state.day - batch.sinceDay > windowDays) {
+          state.personnel.permanentLosses += batch.count;
+          state.eventLog.push({
+            day: state.day,
+            type: 'evac-expired',
+            divisionId: division.id,
+            count: batch.count,
+            text: `${division.name}待后送伤员 ${batch.count.toFixed(1)} 点超过时间窗，彻底损失。`,
+          });
+        } else {
+          remaining.push(batch);
+        }
+      }
+      division.evacQueue = remaining;
+    }
   }
 
   function clamp(value, minimum, maximum) {
@@ -377,8 +539,8 @@
         ammoDays: division.ammoDays,
       };
       const casualties = division.manpowerRatio * PERSONNEL_FULL_STRENGTH * outcome.casualtyRate;
-      const kia = casualties * 0.3;
-      const wounded = casualties * 0.7;
+      const kia = casualties * CASUALTY_SPLIT.kia;
+      const wounded = casualties * CASUALTY_SPLIT.wounded;
       division.manpowerRatio = clamp(
         division.manpowerRatio - casualties / PERSONNEL_FULL_STRENGTH,
         0,
@@ -389,7 +551,7 @@
       division.casualtiesTotal += casualties;
       division.equipmentReady = clamp(division.equipmentReady - outcome.equipmentLossRate, 0, 1);
       state.personnel.permanentLosses += kia;
-      sendWoundedToHospital(state, wounded);
+      enqueueEvac(division, 'wounded', wounded, state.day);
       const preview = state.battlePreview.find((candidate) => (
         candidate.divisionId === division.id && candidate.day === state.day
       ));
@@ -516,22 +678,9 @@
   }
 
   function assignPersonnel(state) {
-    for (const division of state.divisions) {
-      const requested = state.orders.personnelAssignment[division.id] || 0;
-      const count = Math.min(requested, state.personnel.pool);
-      if (count > 0) {
-        const rule = integrationRuleFor(division);
-        state.personnel.pool -= count;
-        state.personnel.integrationQueue.push({
-          id: `integration-${state.day}-${state.personnel.integrationQueue.length + 1}`,
-          divisionId: division.id,
-          count,
-          arrivesDay: state.day + Math.ceil(rule.delayDays),
-          effPenalty: rule.effPenalty,
-        });
-      }
-    }
-    state.orders.personnelAssignment = {};
+    // Standing assignment only caps who boards outbound trucks.
+    // People leave the pool in dispatchShipments, not here.
+    return state.orders.personnelAssignment;
   }
 
   function lineCapacityPerDay(line) {
@@ -546,34 +695,52 @@
   // from player orders, inventory and division priorities.
   function dispatchShipments(state, shipmentOrders) {
     const usedCapacity = new Map();
+    let fleetUsed = occupiedFleet(state);
 
     for (const shipment of shipmentOrders) {
       const line = getLineById(shipment.lineId);
+      if (!usedCapacity.has(line.id)) {
+        usedCapacity.set(line.id, lineOutboundToday(state, line.id));
+      }
       const cargo = {
         ammo: shipment.cargo.ammo || 0,
         supply: shipment.cargo.supply || 0,
         personnel: shipment.cargo.personnel || 0,
+        wounded: 0,
+        rotation: 0,
       };
-      const amount = cargoTotal(cargo);
-      const capacityUsed = (usedCapacity.get(line.id) || 0) + amount;
+      const fleetSize = shipment.fleetSize || cargoTotal(cargo);
+      const capacityUsed = (usedCapacity.get(line.id) || 0) + fleetSize;
 
-      if (amount <= 0) {
-        throw new Error(`Shipment on ${line.id} must carry a positive amount`);
+      if (fleetSize <= 0) {
+        throw new Error(`Shipment on ${line.id} must occupy a positive fleet`);
       }
       if (capacityUsed > lineCapacityPerDay(line) + Number.EPSILON * 8) {
         throw new Error(`Shipment on ${line.id} exceeds its daily capacity`);
       }
-      if (cargo.ammo > state.base.ammo || cargo.supply > state.base.supply) {
+      if (fleetUsed + fleetSize > TOTAL_TRANSPORT_PER_DAY + Number.EPSILON * 8) {
+        throw new Error(`Shipment on ${line.id} exceeds dispatchable fleet`);
+      }
+      if (cargo.ammo > state.base.ammo + Number.EPSILON * 8
+        || cargo.supply > state.base.supply + Number.EPSILON * 8) {
         throw new Error(`Shipment on ${line.id} exceeds available base inventory`);
+      }
+      const personnelPoints = personnelDToPoints(cargo.personnel);
+      if (personnelPoints > state.personnel.pool + Number.EPSILON * 8) {
+        throw new Error(`Shipment on ${line.id} exceeds available personnel pool`);
       }
 
       usedCapacity.set(line.id, capacityUsed);
+      fleetUsed += fleetSize;
       state.base.ammo -= cargo.ammo;
       state.base.supply -= cargo.supply;
+      state.personnel.pool = Math.max(0, state.personnel.pool - personnelPoints);
       state.transitQueue.push({
         id: `shipment-${state.day}-${state.transitQueue.length + 1}`,
         lineId: line.id,
         divisionId: line.divisionId,
+        leg: 'outbound',
+        fleetSize,
         cargo,
         dispatchedDay: state.day,
         arrivesDay: state.day + line.transitDays,
@@ -594,38 +761,67 @@
       (sum, division) => sum + priorityOf(division),
       0,
     );
-    const dailyCap = Math.max(0, Math.min(TOTAL_TRANSPORT_PER_DAY, state.orders.dailyShipmentCap));
-    if (totalPriority <= 0 || dailyCap <= 0 || (state.base.ammo <= 0 && state.base.supply <= 0)) {
+    const dailyCap = Math.max(0, Math.min(availableTransport(state), state.orders.dailyShipmentCap));
+    if (totalPriority <= 0 || dailyCap <= 0) {
       return [];
     }
 
     const shipments = [];
     let availableAmmo = state.base.ammo;
     let availableSupply = state.base.supply;
+    let availablePersonnelPoints = state.personnel.pool;
+    let remainingFleet = dailyCap;
     for (const line of MAP.lines) {
-      const priority = priorityOf(getDivisionById(state, line.divisionId));
+      const division = getDivisionById(state, line.divisionId);
+      const priority = priorityOf(division);
       const allocation = Math.min(
-        lineCapacityPerDay(line),
+        Math.max(0, lineCapacityPerDay(line) - lineOutboundToday(state, line.id)),
         dailyCap * priority / totalPriority,
+        remainingFleet,
       );
       const ratio = state.orders.lineRatios[line.id] || {};
-      const materialRatio = Math.max(0, ratio.ammo || 0) + Math.max(0, ratio.supply || 0);
-      if (allocation <= 0 || materialRatio <= 0) {
+      const ammoRatio = Math.max(0, ratio.ammo || 0);
+      const supplyRatio = Math.max(0, ratio.supply || 0);
+      const personnelRatio = Math.max(0, ratio.personnel || 0);
+      const ratioSum = ammoRatio + supplyRatio + personnelRatio;
+      if (allocation <= 0 || ratioSum <= 0) {
         continue;
       }
-      const desiredAmmo = allocation * Math.max(0, ratio.ammo || 0) / materialRatio;
-      const desiredSupply = allocation * Math.max(0, ratio.supply || 0) / materialRatio;
-      const scale = Math.min(
+      const desiredAmmo = allocation * ammoRatio / ratioSum;
+      const desiredSupply = allocation * supplyRatio / ratioSum;
+      const desiredPersonnelD = allocation * personnelRatio / ratioSum;
+      const materialScale = Math.min(
         1,
         desiredAmmo > 0 ? availableAmmo / desiredAmmo : 1,
         desiredSupply > 0 ? availableSupply / desiredSupply : 1,
       );
-      const cargo = { ammo: desiredAmmo * scale, supply: desiredSupply * scale, personnel: 0 };
-      if (cargoTotal(cargo) > 0) {
-        shipments.push({ lineId: line.id, cargo });
-        availableAmmo -= cargo.ammo;
-        availableSupply -= cargo.supply;
-      }
+      const assigned = state.orders.personnelAssignment[division.id];
+      const assignmentCapPoints = assigned === undefined ? Infinity : Math.max(0, assigned);
+      const personnelD = Math.min(
+        desiredPersonnelD,
+        personnelPointsToD(availablePersonnelPoints),
+        personnelPointsToD(assignmentCapPoints),
+      );
+      const cargo = {
+        ammo: desiredAmmo * materialScale,
+        supply: desiredSupply * materialScale,
+        personnel: personnelD,
+        wounded: 0,
+        rotation: 0,
+      };
+      const expectedReturn = previewReturnLoad(state, division, allocation);
+      shipments.push({
+        lineId: line.id,
+        fleetSize: allocation,
+        cargo,
+        expectedReturn,
+        outboundArrivesDay: state.day + line.transitDays,
+        fleetReturnsDay: state.day + line.transitDays * 2,
+      });
+      remainingFleet -= allocation;
+      availableAmmo -= cargo.ammo;
+      availableSupply -= cargo.supply;
+      availablePersonnelPoints -= personnelDToPoints(personnelD);
     }
     return shipments;
   }
@@ -641,33 +837,87 @@
     return shipments;
   }
 
+  function enqueueRestingRotation(state, count) {
+    if (count > 0) {
+      state.personnel.trainingQueue.push({
+        id: `rest-${state.day}-${state.personnel.trainingQueue.length + 1}`,
+        count,
+        track: 'rest',
+        recoveredVeteran: true,
+        arrivesDay: state.day + ROTATION_REST_DAYS,
+      });
+    }
+  }
+
+  function unloadOutbound(state, shipment) {
+    const division = getDivisionById(state, shipment.divisionId);
+    const dailyConsumption = dailyConsumptionOf(division);
+    division.ammoDays += shipment.cargo.ammo / dailyConsumption.ammo;
+    division.supplyDays += shipment.cargo.supply / dailyConsumption.supply;
+    const replacementPoints = personnelDToPoints(shipment.cargo.personnel || 0);
+    if (replacementPoints > 0) {
+      const rule = integrationRuleFor(division);
+      state.personnel.integrationQueue.push({
+        id: `integration-${state.day}-${state.personnel.integrationQueue.length + 1}`,
+        divisionId: division.id,
+        count: replacementPoints,
+        arrivesDay: state.day + Math.ceil(rule.delayDays),
+        effPenalty: rule.effPenalty,
+      });
+    }
+    for (const request of state.frontRequests) {
+      if (
+        request.divisionId === division.id
+        && state.day >= request.announcedDay
+        && state.day <= request.battleDay
+      ) {
+        request.deliveredAmmo += shipment.cargo.ammo;
+        request.shipmentIds.push(shipment.id);
+      }
+    }
+    const line = getLineById(shipment.lineId);
+    const loaded = loadReturnCargo(state, division, shipment.fleetSize || cargoTotal(shipment.cargo));
+    return {
+      id: `return-${shipment.id}`,
+      lineId: shipment.lineId,
+      divisionId: shipment.divisionId,
+      leg: 'return',
+      fleetSize: shipment.fleetSize || cargoTotal(shipment.cargo),
+      cargo: {
+        ammo: 0,
+        supply: 0,
+        personnel: 0,
+        wounded: loaded.wounded,
+        rotation: loaded.rotation,
+      },
+      dispatchedDay: state.day,
+      arrivesDay: state.day + line.transitDays,
+      outboundId: shipment.id,
+    };
+  }
+
+  function unloadReturn(state, shipment) {
+    sendWoundedToHospital(state, shipment.cargo.wounded || 0, state.day);
+    enqueueRestingRotation(state, shipment.cargo.rotation || 0);
+  }
+
   function advanceQueues(state) {
     const remainingShipments = [];
+    const newReturns = [];
 
     for (const shipment of state.transitQueue) {
       if (shipment.arrivesDay !== state.day) {
         remainingShipments.push(shipment);
         continue;
       }
-
-      const division = getDivisionById(state, shipment.divisionId);
-      const dailyConsumption = dailyConsumptionOf(division);
-      division.ammoDays += shipment.cargo.ammo / dailyConsumption.ammo;
-      division.supplyDays += shipment.cargo.supply / dailyConsumption.supply;
-      state.personnel.pool += shipment.cargo.personnel;
-      for (const request of state.frontRequests) {
-        if (
-          request.divisionId === division.id
-          && state.day >= request.announcedDay
-          && state.day <= request.battleDay
-        ) {
-          request.deliveredAmmo += shipment.cargo.ammo;
-          request.shipmentIds.push(shipment.id);
-        }
+      if (shipment.leg === 'return') {
+        unloadReturn(state, shipment);
+        continue;
       }
+      newReturns.push(unloadOutbound(state, shipment));
     }
 
-    state.transitQueue = remainingShipments;
+    state.transitQueue = remainingShipments.concat(newReturns);
 
     const remainingTraining = [];
     for (const batch of state.personnel.trainingQueue) {
@@ -675,7 +925,15 @@
         remainingTraining.push(batch);
       } else {
         state.personnel.pool += batch.count;
-        state.eventLog.push({ day: state.day, type: 'training-complete', count: batch.count, track: batch.track });
+        if (batch.recoveredVeteran && batch.track !== 'rest') {
+          state.personnel.recoveredVeterans += batch.count;
+        }
+        state.eventLog.push({
+          day: state.day,
+          type: 'training-complete',
+          count: batch.count,
+          track: batch.track,
+        });
       }
     }
     state.personnel.trainingQueue = remainingTraining;
@@ -720,6 +978,7 @@
       }
     }
     state.personnel.integrationQueue = remainingIntegration;
+    expireEvacQueues(state);
   }
 
   function finishCampaign(state, code, label, reason) {
@@ -787,8 +1046,8 @@
     state.day += 1;
     settleQuota(state);
     settleMobilization(state);
+    applyRotationOrders(state);
     advanceQueues(state);
-    assignPersonnel(state);
     if (campaignScript) {
       announceCampaignPressure(state);
     }
@@ -818,6 +1077,10 @@
     advanceQueues,
     advanceDay,
     lineCapacityPerDay,
+    occupiedFleet,
+    availableTransport,
+    previewReturnLoad,
+    applyRotationOrders,
     ammoTierOf,
     computeEffectiveness,
     dailyConsumptionOf,
